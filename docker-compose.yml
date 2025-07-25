@@ -1,0 +1,25 @@
+version: "3.8"
+
+services:
+  mongo:
+    image: mongo:6.0
+    container_name: garmin-mongo
+    restart: unless-stopped
+    volumes:
+      - ./mongo_data:/data/db
+    ports:
+      - "27017:27017"
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: garmin-bot
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    env_file:
+      - .env
+    environment:
+      MONGODB_URI: "mongodb://mongo:27017"
+    command: ["python", "bot.py"]

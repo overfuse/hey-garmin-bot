@@ -1,0 +1,95 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Interval Workout",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "intervals"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Friendly workout name (e.g. '10×300/100/200 + rest')"
+    },
+    "warmup": {
+      "type": "object",
+      "description": "Optional easy running before the first interval",
+      "required": ["distance"],
+      "additionalProperties": false,
+      "properties": {
+        "distance": { "type": "integer", "minimum": 1, "description": "Distance in metres" },
+        "pace": {
+          "type": "string",
+          "pattern": "^[0-9]+:[0-5][0-9]$",
+          "description": "Optional target pace (min:sec per km)"
+        }
+      }
+    },
+    "intervals": {
+      "type": "array",
+      "description": "Main workout segment consisting of run/rest steps or repeat groups",
+      "items": { "$ref": "#/definitions/element" }
+    },
+    "cooldown": {
+      "type": "object",
+      "description": "Optional easy running after the last interval",
+      "required": ["distance"],
+      "additionalProperties": false,
+      "properties": {
+        "distance": { "type": "integer", "minimum": 1, "description": "Distance in metres" },
+        "pace": {
+          "type": "string",
+          "pattern": "^[0-9]+:[0-5][0-9]$",
+          "description": "Optional target pace (min:sec per km)"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "runStep": {
+      "type": "object",
+      "description": "A running segment. Omit 'pace' to model an easy recovery jog.",
+      "required": ["type", "distance"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "run" },
+        "distance": { "type": "integer", "minimum": 1, "description": "Distance in metres" },
+        "pace": {
+          "type": "string",
+          "pattern": "^[0-9]+:[0-5][0-9]$",
+          "description": "Target pace (min:sec per km)"
+        }
+      }
+    },
+    "restStep": {
+      "type": "object",
+      "description": "Passive or standing rest.",
+      "required": ["type", "rest"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "rest" },
+        "rest": { "type": "integer", "minimum": 1, "description": "Rest duration in seconds" }
+      }
+    },
+    "repeatGroup": {
+      "type": "object",
+      "description": "A grouping that repeats its internal steps in order.",
+      "required": ["type", "repeat", "steps"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "repeat" },
+        "repeat": { "type": "integer", "minimum": 1, "description": "Number of repetitions" },
+        "steps": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/element" },
+          "description": "Ordered list of steps to repeat"
+        }
+      }
+    },
+    "element": {
+      "oneOf": [
+        { "$ref": "#/definitions/runStep" },
+        { "$ref": "#/definitions/restStep" },
+        { "$ref": "#/definitions/repeatGroup" }
+      ]
+    }
+  }
+}

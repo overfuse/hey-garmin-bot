@@ -1,0 +1,12 @@
+db
+users.db
+__pycache__/
+.env
+.venv
+.idea
+intervals
+prompts
+workouts
+CACHEDIR.TAG
+mongo_data
+examples
