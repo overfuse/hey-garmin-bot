@@ -159,6 +159,9 @@ def convert(interval_json: Dict[str, Any]) -> Dict[str, Any]:
             key = "interval" if "pace" in elem else "recovery"
             order += 1
             return exec_step(order, key, distance=elem["distance"], pace=elem.get("pace"), child=nested)
+        if etype == "recovery":
+            order += 1
+            return exec_step(order, "recovery", distance=elem["distance"], child=nested)
         if etype == "rest":
             order += 1
             return exec_step(order, "rest", rest=elem["rest"], child=nested)

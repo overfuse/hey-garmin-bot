@@ -2,7 +2,7 @@ import os
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from dotenv import load_dotenv
-from garmin import login_to_garmin, upload_workout_to_garmin
+from garmin import login_to_garmin, upload_workout_to_garmin_async
 from user import get_user, save_user, delete_user
 from session import temp_sessions
 
@@ -96,7 +96,7 @@ async def text_handler(client: Client, message: Message):
         workout_data = message.text  # For file uploads, use filters.document and download
         await message.reply("Uploading your workout to Garmin Connect...")
         try:
-            workout_id = upload_workout_to_garmin(user_data["garmin_auth"], workout_data)
+            workout_id = await upload_workout_to_garmin_async(user_data["garmin_auth"], workout_data)
             return await message.reply(f"Workout successfully imported! 🎉\nhttps://connect.garmin.com/modern/workout/{workout_id}")
         except Exception as e:
             return await message.reply(f"Failed to import workout: {e}. Please try again.")

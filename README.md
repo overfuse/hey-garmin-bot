@@ -2,6 +2,10 @@
 
 A simple Telegram bot that allows users to import workout plans into their Garmin Connect account. Built with Python and Pyrogram, and uses MongoDB for persistent user storage.
 
+## Demo
+
+Try it live: [HeyGarminBot on Telegram](https://t.me/HeyGarminBot)
+
 ## Features
 
 - **User Login Flow**: Users authenticate with their Garmin Connect credentials via `/start`. Credentials are kept in a short-lived in-memory session and immediately discarded after exchanging for a Garmin session token.

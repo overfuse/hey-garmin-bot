@@ -1,4 +1,6 @@
 .idea
 .venv
 .env
+.DS_Store
 mongo_data
+__pycache__

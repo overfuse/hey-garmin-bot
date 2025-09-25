@@ -1,0 +1,35 @@
+{
+  "name": "10×(300 m @3:30 + 100 m jog + 200 m @3:20 + 90 s rest)",
+  "warmup": {
+    "distance": 3000
+  },
+  "intervals": [
+    {
+      "type": "repeat",
+      "repeat": 10,
+      "steps": [
+        {
+          "type": "run",
+          "distance": 300,
+          "pace": "3:30"
+        },
+        {
+          "type": "recovery",
+          "distance": 100
+        },
+        {
+          "type": "run",
+          "distance": 200,
+          "pace": "3:20"
+        },
+        {
+          "type": "rest",
+          "rest": 90
+        }
+      ]
+    }
+  ],
+  "cooldown": {
+    "distance": 2000
+  }
+}
