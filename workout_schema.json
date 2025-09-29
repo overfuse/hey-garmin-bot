@@ -11,8 +11,7 @@
     },
     "warmup": {
       "type": "object",
-      "description": "Optional easy running before the first interval",
-      "required": ["distance"],
+      "description": "Optional easy running before the first interval (lap-based if distance omitted)",
       "additionalProperties": false,
       "properties": {
         "distance": {
@@ -34,8 +33,7 @@
     },
     "cooldown": {
       "type": "object",
-      "description": "Optional easy running after the last interval",
-      "required": ["distance"],
+      "description": "Optional easy running after the last interval (lap-based if distance omitted)",
       "additionalProperties": false,
       "properties": {
         "distance": {
