@@ -165,5 +165,12 @@ async def startup():
 
 if __name__ == "__main__":
     import asyncio
-    asyncio.run(startup())
-    app.run()
+    from pyrogram import idle
+
+    async def main():
+        await startup()
+        await app.start()
+        await idle()
+        await app.stop()
+
+    asyncio.run(main())
