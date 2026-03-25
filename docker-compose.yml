@@ -10,6 +10,14 @@ services:
     ports:
       - "27017:27017"
 
+  redis:
+    image: redis:7-alpine
+    container_name: garmin-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+
   bot:
     build:
       context: .
@@ -18,8 +26,10 @@ services:
     restart: unless-stopped
     depends_on:
       - mongo
+      - redis
     env_file:
       - .env
     environment:
       MONGODB_URI: "mongodb://mongo:27017"
+      REDIS_URL: "redis://redis:6379/0"
     command: ["python", "bot.py"]
