@@ -36,9 +36,10 @@ async def login_to_garmin(login: str, password: str) -> str:
         def _do_login():
             # Use a fresh client that does NOT retry on 429 —
             # retrying rate-limited SSO requests only digs a deeper hole.
-            client = GarthClient(
-                status_forcelist=(408, 500, 502, 503, 504),
-            )
+            # NB: passing status_forcelist to GarthClient(...) collides with
+            # the class default that __init__ already forwards to configure().
+            client = GarthClient()
+            client.configure(status_forcelist=(408, 500, 502, 503, 504))
             # Override the default garth User-Agent — Garmin's SSO blocks the
             # library's UA, so masquerade as a regular desktop Chrome browser.
             client.sess.headers.update({
