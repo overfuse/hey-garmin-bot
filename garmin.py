@@ -14,8 +14,10 @@ _last_login_time: float = 0.0
 _MIN_LOGIN_INTERVAL = 60.0  # seconds between SSO logins
 
 
-# --- Login method: "garth" (default) or "browser" ---
-# Set GARMIN_LOGIN_METHOD=browser to use Playwright-based login.
+# --- Login method: "garth" (default), "curl", or "browser" ---
+#  * garth   — plain requests; cheap but blocked by Cloudflare on cloud IPs.
+#  * curl    — curl_cffi w/ Chrome TLS impersonation; bypasses CF JA3 fingerprinting.
+#  * browser — full Playwright Chromium; heaviest but solves JS challenges.
 LOGIN_METHOD = os.getenv("GARMIN_LOGIN_METHOD", "garth")
 
 
@@ -26,6 +28,8 @@ def workout_url(workout_id) -> str:
 async def login_to_garmin(login: str, password: str) -> str:
     if LOGIN_METHOD == "browser":
         return await login_to_garmin_browser(login, password)
+    if LOGIN_METHOD == "curl":
+        return await login_to_garmin_curl(login, password)
 
     global _last_login_time
     async with _login_lock:
@@ -61,6 +65,12 @@ async def login_to_garmin_browser(login: str, password: str) -> str:
     """Login via headless Playwright browser. Bypasses SSO 429 rate limits."""
     from garmin_browser_auth import browser_login_automated
     return await asyncio.to_thread(browser_login_automated, login, password)
+
+
+async def login_to_garmin_curl(login: str, password: str) -> str:
+    """Login via curl_cffi w/ Chrome TLS fingerprint. Bypasses CF JA3 blocks."""
+    from garmin_curl_login import curl_login
+    return await asyncio.to_thread(curl_login, login, password)
 
 
 def token_from_session(session_path: str = "~/.garth") -> str:

@@ -19,7 +19,6 @@ from urllib.parse import parse_qs
 
 import requests
 from requests_oauthlib import OAuth1Session
-from playwright.sync_api import sync_playwright, Page, Browser
 
 OAUTH_CONSUMER_URL = "https://thegarth.s3.amazonaws.com/oauth_consumer.json"
 ANDROID_UA = "com.garmin.android.apps.connectmobile"
@@ -113,7 +112,7 @@ def _to_garth_token(oauth1: dict, oauth2: dict) -> str:
     return base64.b64encode(bundle.encode()).decode()
 
 
-def _wait_for_ticket(page: Page, timeout: int) -> str:
+def _wait_for_ticket(page, timeout: int) -> str:
     """Poll page content/URL for the SSO ticket (ST-...)."""
     start = time.time()
     while time.time() - start < timeout:
@@ -135,6 +134,8 @@ def _wait_for_ticket(page: Page, timeout: int) -> str:
 
 def browser_login_interactive() -> str:
     """Open a visible browser for manual Garmin login. Returns garth token."""
+    from playwright.sync_api import sync_playwright
+
     consumer = _get_oauth_consumer()
 
     with sync_playwright() as p:
@@ -156,6 +157,8 @@ def browser_login_automated(username: str, password: str) -> str:
 
     Returns garth-compatible base64 token string.
     """
+    from playwright.sync_api import sync_playwright
+
     consumer = _get_oauth_consumer()
 
     with sync_playwright() as p:

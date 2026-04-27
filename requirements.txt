@@ -32,3 +32,4 @@ typing-inspection==0.4.1
 typing_extensions==4.14.1
 urllib3==2.5.0
 playwright>=1.40.0
+curl_cffi>=0.7.0
