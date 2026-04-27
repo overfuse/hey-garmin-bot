@@ -15,7 +15,7 @@ services:
     container_name: garmin-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "6378:6379"
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
 
   bot:
@@ -30,6 +30,8 @@ services:
     env_file:
       - .env
     environment:
+      PYTHONUNBUFFERED: "1"
+      GARMIN_LOGIN_METHOD: "browser"
       MONGODB_URI: "mongodb://mongo:27017"
       REDIS_URL: "redis://redis:6379/0"
     command: ["python", "bot.py"]

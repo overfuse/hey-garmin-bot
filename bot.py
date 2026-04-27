@@ -2,7 +2,7 @@ import os
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from dotenv import load_dotenv
-from garmin import login_to_garmin, upload_workout_to_garmin_async
+from garmin import login_to_garmin, upload_workout_to_garmin_async, refresh_token_async, workout_url
 from user import get_user, save_user, delete_user
 from session import temp_sessions
 from rate_limiter import check_rate_limit, record_request, get_user_stats, RateLimitExceeded, create_indexes
@@ -26,6 +26,12 @@ app = Client("garmin_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN
 @app.on_message(filters.command("start") & filters.private)
 async def start_handler(client: Client, message: Message):
     user_id = message.from_user.id
+    user_data = await get_user(user_id)
+    if user_data and user_data.get("state") == AUTHORIZED and user_data.get("garmin_auth"):
+        return await message.reply(
+            "You are already logged in! Send me a workout plan to import.\n"
+            "Use /logout first if you want to switch accounts."
+        )
     # Initialize persistent state
     await save_user(user_id, {"state": AWAIT_USERNAME})
     # Prepare temp session storage
@@ -125,14 +131,14 @@ async def text_handler(client: Client, message: Message):
         try:
             # Upload and get metadata
             workout_id, workout_json, processing_time = await upload_workout_to_garmin_async(
-                user_data["garmin_auth"], 
+                user_data["garmin_auth"],
                 workout_data,
                 user_id
             )
-            
+
             # Record successful request
             await record_request(user_id)
-            
+
             # Log to MongoDB
             await log_workout_request(
                 user_id=user_id,
@@ -141,18 +147,49 @@ async def text_handler(client: Client, message: Message):
                 garmin_workout_id=workout_id,
                 processing_time_ms=processing_time
             )
-            
+
             return await message.reply(
                 f"Workout successfully imported! 🎉\n"
-                f"https://connect.garmin.com/modern/workout/{workout_id}\n\n"
+                f"{workout_url(workout_id)}\n\n"
                 f"⚡ Processed in {processing_time:.0f}ms"
             )
         except Exception as e:
+            error_str = str(e)
+            # Token expired — try refreshing via OAuth1 (no SSO hit)
+            if "401" in error_str or "OAuth" in error_str or "expired" in error_str.lower():
+                try:
+                    new_token = await refresh_token_async(user_data["garmin_auth"])
+                    user_data["garmin_auth"] = new_token
+                    await save_user(user_id, user_data)
+                    await message.reply("Session refreshed, retrying upload...")
+                    workout_id, workout_json, processing_time = await upload_workout_to_garmin_async(
+                        new_token, workout_data, user_id
+                    )
+                    await record_request(user_id)
+                    await log_workout_request(
+                        user_id=user_id,
+                        prompt=workout_data,
+                        workout_json=workout_json,
+                        garmin_workout_id=workout_id,
+                        processing_time_ms=processing_time
+                    )
+                    return await message.reply(
+                        f"Workout successfully imported! 🎉\n"
+                        f"{workout_url(workout_id)}\n\n"
+                        f"⚡ Processed in {processing_time:.0f}ms"
+                    )
+                except Exception:
+                    await log_workout_request(
+                        user_id=user_id, prompt=workout_data, error=error_str
+                    )
+                    return await message.reply(
+                        f"Session expired and refresh failed. Use /logout then /start to re-login."
+                    )
             # Log error
             await log_workout_request(
                 user_id=user_id,
                 prompt=workout_data,
-                error=str(e)
+                error=error_str
             )
             return await message.reply(f"Failed to import workout: {e}. Please try again.")
 
@@ -164,13 +201,17 @@ async def startup():
     print("✓ Workout log indexes created")
 
 if __name__ == "__main__":
-    import asyncio
     from pyrogram import idle
 
     async def main():
         await startup()
+        print("Starting Pyrogram...")
         await app.start()
+        print(f"Bot started as @{app.me.username}")
         await idle()
         await app.stop()
 
-    asyncio.run(main())
+    # Must use app.run() — it reuses the event loop that Pyrogram's
+    # Dispatcher captured at import time.  asyncio.run() creates a
+    # new loop, so handlers registered via decorators would be lost.
+    app.run(main())

@@ -4,6 +4,7 @@ import sys
 import garth
 from chatgpt import plan_to_json
 from garmin_convert import convert
+from garmin import workout_url
 from typing import Dict, Any
 
 def import_workout(plan: str) -> Dict[str, Any]:
@@ -18,7 +19,7 @@ def upload_workout(workout_data) -> Dict[str, Any]:
 def main():
     workout_plan = sys.stdin.read()
     result = import_workout(workout_plan)
-    print(f"View copy at https://connect.garmin.com/modern/workout/{result['workoutId']}")
+    print(f"View copy at {workout_url(result['workoutId'])}")
 
 if __name__ == "__main__":
     main()
