@@ -109,32 +109,63 @@ def ticket_to_token(ticket: str, login_url: str | None = None) -> str:
 
     Used by the browser-driven ("web") auth flow: the user completes the
     Garmin SSO login in *their own* browser (residential IP, MFA/CAPTCHA
-    handled by a human), so only this token exchange runs server-side. The
-    OAuth1/OAuth2 endpoints aren't behind the same Cloudflare rule set as
-    /sso/signin, so this works from cloud egress IPs.
+    handled by a human), so only this token exchange runs server-side.
+
+    connectapi.garmin.com is behind the same Cloudflare JA3 classifier as
+    /sso/signin, so from cloud egress IPs (Railway) plain requests gets 429.
+    We go through curl_cffi Chrome impersonation to look like a browser.
 
     `login_url` must equal the CAS `service` the widget issued the ticket
-    for. When the widget redirects to our own callback, that callback URL
-    is the service; otherwise the SSO embed page is the default.
+    for. The SSO embed page is the default (paste-URL/JSON flow).
     """
     from garmin_browser_auth import (
-        _exchange_oauth1_for_oauth2,
-        _exchange_ticket_for_oauth1,
+        _exchange_oauth1_for_oauth2_curl,
+        _exchange_ticket_for_oauth1_curl,
         _get_oauth_consumer,
         _to_garth_token,
     )
 
     consumer = _get_oauth_consumer()
     if login_url:
-        oauth1 = _exchange_ticket_for_oauth1(ticket, consumer, login_url)
+        oauth1 = _exchange_ticket_for_oauth1_curl(ticket, consumer, login_url)
     else:
-        oauth1 = _exchange_ticket_for_oauth1(ticket, consumer)
-    oauth2 = _exchange_oauth1_for_oauth2(oauth1, consumer)
+        oauth1 = _exchange_ticket_for_oauth1_curl(ticket, consumer)
+    oauth2 = _exchange_oauth1_for_oauth2_curl(oauth1, consumer)
     return _to_garth_token(oauth1, oauth2)
 
 
 async def ticket_to_token_async(ticket: str, login_url: str | None = None) -> str:
     return await asyncio.to_thread(ticket_to_token, ticket, login_url)
+
+
+def looks_like_garth_token(text: str) -> str | None:
+    """Return the cleaned token if `text` is a garth token, else None.
+
+    A garth token is base64(json([oauth1_dict, oauth2_dict])). Lets users
+    who generate the token off-server (residential IP, no 429) paste it in
+    directly — the bot then never calls Garmin for auth at all.
+    """
+    import base64
+    import json
+
+    if not text:
+        return None
+    candidate = "".join(text.split())  # tolerate pasted whitespace/newlines
+    try:
+        decoded = base64.b64decode(candidate, validate=True)
+        bundle = json.loads(decoded)
+    except Exception:
+        return None
+    if (
+        isinstance(bundle, (list, tuple))
+        and len(bundle) == 2
+        and isinstance(bundle[0], dict)
+        and isinstance(bundle[1], dict)
+        and "oauth_token" in bundle[0]
+        and "access_token" in bundle[1]
+    ):
+        return candidate
+    return None
 
 
 def token_from_session(session_path: str = "~/.garth") -> str:
@@ -147,12 +178,23 @@ def token_from_session(session_path: str = "~/.garth") -> str:
 def refresh_token(token: str) -> str:
     """Refresh OAuth2 using the stored OAuth1 token.
 
-    This calls the token exchange endpoint, NOT the SSO login page,
-    so it won't trigger SSO rate limits.
+    Re-runs the OAuth1->OAuth2 exchange (no SSO, no ticket) via curl_cffi
+    impersonation rather than garth's plain-requests refresh, since that
+    endpoint 429s from Railway's IP just like the initial exchange.
     """
-    garth.client.loads(token)
-    garth.client.refresh_oauth2()
-    return garth.client.dumps()
+    import base64
+    import json
+
+    from garmin_browser_auth import (
+        _exchange_oauth1_for_oauth2_curl,
+        _get_oauth_consumer,
+        _to_garth_token,
+    )
+
+    oauth1, _ = json.loads(base64.b64decode(token))
+    consumer = _get_oauth_consumer()
+    oauth2 = _exchange_oauth1_for_oauth2_curl(oauth1, consumer)
+    return _to_garth_token(oauth1, oauth2)
 
 
 async def refresh_token_async(token: str) -> str:

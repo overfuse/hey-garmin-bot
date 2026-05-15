@@ -101,6 +101,84 @@ def _exchange_oauth1_for_oauth2(oauth1: dict, consumer: dict) -> dict:
     return token
 
 
+# --- curl_cffi variants -----------------------------------------------------
+# connectapi.garmin.com sits behind the same Cloudflare JA3 classifier as
+# /sso/signin: from cloud egress IPs (Railway etc.) plain requests/urllib3
+# get 429 on the OAuth exchange. We sign OAuth1 with oauthlib but send the
+# request via curl_cffi's Chrome TLS/HTTP2 impersonation so the handshake
+# looks like a real browser. (The consumer key/secret is the public one
+# from garth's S3 bucket, so computing the signature client-side is fine.)
+
+IMPERSONATE = "chrome131"
+
+
+def _oauth1_signed(method: str, url: str, consumer: dict, oauth1: dict | None,
+                   body: dict | None = None):
+    """Build the OAuth1 Authorization header + (encoded) body via oauthlib."""
+    from oauthlib.oauth1 import Client as OAuth1Client
+    from urllib.parse import urlencode
+
+    client = OAuth1Client(
+        consumer["consumer_key"],
+        client_secret=consumer["consumer_secret"],
+        resource_owner_key=(oauth1 or {}).get("oauth_token"),
+        resource_owner_secret=(oauth1 or {}).get("oauth_token_secret"),
+    )
+    headers = {"User-Agent": ANDROID_UA}
+    enc_body = None
+    if method == "POST":
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+        enc_body = urlencode(body or {})
+    uri, signed_headers, signed_body = client.sign(
+        url, http_method=method, body=enc_body, headers=headers
+    )
+    return uri, signed_headers, signed_body
+
+
+def _exchange_ticket_for_oauth1_curl(
+    ticket: str, consumer: dict, login_url: str = "https://sso.garmin.com/sso/embed"
+) -> dict:
+    """Same as _exchange_ticket_for_oauth1 but over curl_cffi impersonation."""
+    from curl_cffi import requests as cffi_requests
+
+    url = (
+        f"https://connectapi.garmin.com/oauth-service/oauth/"
+        f"preauthorized?ticket={ticket}"
+        f"&login-url={login_url}"
+        f"&accepts-mfa-tokens=true"
+    )
+    uri, headers, _ = _oauth1_signed("GET", url, consumer, None)
+    resp = cffi_requests.get(
+        uri, headers=headers, impersonate=IMPERSONATE, timeout=15
+    )
+    resp.raise_for_status()
+    parsed = parse_qs(resp.text)
+    token = {k: v[0] for k, v in parsed.items()}
+    token["domain"] = "garmin.com"
+    return token
+
+
+def _exchange_oauth1_for_oauth2_curl(oauth1: dict, consumer: dict) -> dict:
+    """Same as _exchange_oauth1_for_oauth2 but over curl_cffi impersonation."""
+    from curl_cffi import requests as cffi_requests
+
+    url = "https://connectapi.garmin.com/oauth-service/oauth/exchange/user/2.0"
+    data = {}
+    if oauth1.get("mfa_token"):
+        data["mfa_token"] = oauth1["mfa_token"]
+    uri, headers, body = _oauth1_signed("POST", url, consumer, oauth1, data)
+    resp = cffi_requests.post(
+        uri, data=body, headers=headers, impersonate=IMPERSONATE, timeout=15
+    )
+    resp.raise_for_status()
+    token = resp.json()
+    token["expires_at"] = int(time.time() + token["expires_in"])
+    token["refresh_token_expires_at"] = int(
+        time.time() + token["refresh_token_expires_in"]
+    )
+    return token
+
+
 def _to_garth_token(oauth1: dict, oauth2: dict) -> str:
     """Encode OAuth1 + OAuth2 dicts into garth-compatible base64 token string.
 

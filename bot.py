@@ -11,6 +11,7 @@ from garmin import (
     GARMIN_SSO_LOGIN_URL,
     extract_ticket,
     ticket_to_token_async,
+    looks_like_garth_token,
 )
 from user import get_user, save_user, delete_user
 from session import temp_sessions
@@ -61,7 +62,9 @@ async def start_handler(client: Client, message: Message):
             "2. After login the page shows a small JSON "
             "(`{\"serviceTicket\":\"ST-...\"}`).\n"
             "3. Paste it back here — the JSON **or** the page's full "
-            "address-bar URL, either works.",
+            "address-bar URL, either works.\n\n"
+            "_If you hit a rate-limit error, use /token to generate the "
+            "token on your own machine instead._",
             reply_markup=InlineKeyboardMarkup(
                 [[InlineKeyboardButton("🔐 Sign in to Garmin", url=GARMIN_SSO_LOGIN_URL)]]
             ),
@@ -98,6 +101,24 @@ async def stats_handler(client: Client, message: Message):
     )
     await message.reply(response)
 
+
+# /token command: how to generate a token off-server (bypasses IP rate limit)
+@app.on_message(filters.command("token") & filters.private)
+async def token_handler(client: Client, message: Message):
+    await message.reply(
+        "**Generate the token on your own machine** (residential IP — "
+        "Garmin won't rate-limit it), then paste the result here.\n\n"
+        "In the bot's repo folder run:\n"
+        "```\npython make_garmin_token.py\n```\n"
+        "It opens the Garmin login, you sign in, paste back the "
+        "post-login URL/JSON when asked, and it prints a long token "
+        "string. Copy that whole string and paste it to me — I'll store "
+        "it without calling Garmin at all.",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🔐 Sign in to Garmin", url=GARMIN_SSO_LOGIN_URL)]]
+        ),
+    )
+
 # Text handler for login and workout messages
 @app.on_message(filters.text & filters.private)
 async def text_handler(client: Client, message: Message):
@@ -114,12 +135,23 @@ async def text_handler(client: Client, message: Message):
 
     state = user_data.get("state")
 
-    # Web flow: expect the pasted post-login URL containing ?ticket=ST-...
+    # Web flow: accept either a ready-made garth token (best — zero Garmin
+    # calls from our IP) or an ST-... ticket/URL/JSON to exchange server-side.
     if state == AWAIT_WEB_AUTH:
+        pasted_token = looks_like_garth_token(message.text)
+        if pasted_token:
+            user_data.update({"garmin_auth": pasted_token, "state": AUTHORIZED})
+            await save_user(user_id, user_data)
+            print(f"[web-auth] user={user_id} linked via pasted token",
+                  flush=True)
+            return await message.reply(
+                "✅ Garmin Connect linked! Send me any workout plan to import."
+            )
+
         ticket = extract_ticket(message.text)
         if not ticket:
             return await message.reply(
-                "I couldn't find a `ST-...` ticket in that.\n"
+                "I couldn't find a Garmin token or `ST-...` ticket in that.\n"
                 "Sign in below, then paste back the JSON the page shows "
                 "(`{\"serviceTicket\":\"ST-...\"}`) — or the full "
                 "address-bar URL. Either works.",
@@ -134,10 +166,16 @@ async def text_handler(client: Client, message: Message):
             print(f"[web-auth] user={user_id} exchange failed "
                   f"{type(e).__name__}: {e}", flush=True)
             traceback.print_exc()
+            hint = (
+                "Garmin is rate-limiting this server's IP. Generate the "
+                "token on your own machine and paste it here instead — "
+                "see /token for the one-liner."
+                if "429" in str(e)
+                else "The ticket is single-use and expires fast — tap the "
+                "button again for a fresh login, then paste the new URL."
+            )
             return await message.reply(
-                f"Sign-in failed: {type(e).__name__}: {e}\n"
-                "The ticket is single-use and expires fast — tap the button "
-                "again for a fresh login, then paste the new URL.",
+                f"Sign-in failed: {type(e).__name__}: {e}\n{hint}",
                 reply_markup=InlineKeyboardMarkup(
                     [[InlineKeyboardButton("🔐 Sign in to Garmin", url=GARMIN_SSO_LOGIN_URL)]]
                 ),
