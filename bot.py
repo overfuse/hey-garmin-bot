@@ -1,8 +1,17 @@
 import os
+import traceback
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
-from garmin import login_to_garmin, upload_workout_to_garmin_async, refresh_token_async, workout_url
+from garmin import (
+    login_to_garmin,
+    upload_workout_to_garmin_async,
+    refresh_token_async,
+    workout_url,
+    GARMIN_SSO_LOGIN_URL,
+    extract_ticket,
+    ticket_to_token_async,
+)
 from user import get_user, save_user, delete_user
 from session import temp_sessions
 from rate_limiter import check_rate_limit, record_request, get_user_stats, RateLimitExceeded, create_indexes
@@ -17,7 +26,12 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 # States
 AWAIT_USERNAME = "await_username"
 AWAIT_PASSWORD = "await_password"
+AWAIT_WEB_AUTH = "await_web_auth"
 AUTHORIZED = "authorized"
+
+# When "web", /start hands the user a self-service Garmin SSO link instead
+# of collecting credentials in chat (see garmin_auth_web.py).
+LOGIN_METHOD = os.getenv("GARMIN_LOGIN_METHOD", "garth")
 
 # Initialize Pyrogram Client
 app = Client("garmin_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -32,6 +46,27 @@ async def start_handler(client: Client, message: Message):
             "You are already logged in! Send me a workout plan to import.\n"
             "Use /logout first if you want to switch accounts."
         )
+    if LOGIN_METHOD == "web":
+        # Browser-driven flow: the user signs in to Garmin in their OWN
+        # browser (residential IP -> no Cloudflare block; MFA/CAPTCHA handled
+        # by a human; password never reaches the bot), then pastes back
+        # whatever the post-login page shows. extract_ticket() greps the
+        # ST-... out of either the address-bar URL or the JSON the page
+        # renders ({"serviceTicket":"ST-..."}), so either works.
+        await save_user(user_id, {"state": AWAIT_WEB_AUTH})
+        return await message.reply(
+            "**Welcome!** Let's connect your Garmin Connect account — "
+            "your password goes straight to Garmin, never to this bot.\n\n"
+            "1. Tap **Sign in to Garmin** below and log in.\n"
+            "2. After login the page shows a small JSON "
+            "(`{\"serviceTicket\":\"ST-...\"}`).\n"
+            "3. Paste it back here — the JSON **or** the page's full "
+            "address-bar URL, either works.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("🔐 Sign in to Garmin", url=GARMIN_SSO_LOGIN_URL)]]
+            ),
+        )
+
     # Initialize persistent state
     await save_user(user_id, {"state": AWAIT_USERNAME})
     # Prepare temp session storage
@@ -44,6 +79,7 @@ async def logout_handler(client: Client, message: Message):
     user_id = message.from_user.id
     user_data = await get_user(user_id)
     if user_data and user_data.get("state") == AUTHORIZED:
+        await delete_user(user_id)
         await message.reply("You have been logged out of Garmin Connect.")
     else:
         await message.reply("You are not logged in. Use /start to log in.")
@@ -78,6 +114,40 @@ async def text_handler(client: Client, message: Message):
 
     state = user_data.get("state")
 
+    # Web flow: expect the pasted post-login URL containing ?ticket=ST-...
+    if state == AWAIT_WEB_AUTH:
+        ticket = extract_ticket(message.text)
+        if not ticket:
+            return await message.reply(
+                "I couldn't find a `ST-...` ticket in that.\n"
+                "Sign in below, then paste back the JSON the page shows "
+                "(`{\"serviceTicket\":\"ST-...\"}`) — or the full "
+                "address-bar URL. Either works.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("🔐 Sign in to Garmin", url=GARMIN_SSO_LOGIN_URL)]]
+                ),
+            )
+        await message.reply("Got the ticket — finishing sign-in...")
+        try:
+            token = await ticket_to_token_async(ticket)
+        except Exception as e:
+            print(f"[web-auth] user={user_id} exchange failed "
+                  f"{type(e).__name__}: {e}", flush=True)
+            traceback.print_exc()
+            return await message.reply(
+                f"Sign-in failed: {type(e).__name__}: {e}\n"
+                "The ticket is single-use and expires fast — tap the button "
+                "again for a fresh login, then paste the new URL.",
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("🔐 Sign in to Garmin", url=GARMIN_SSO_LOGIN_URL)]]
+                ),
+            )
+        user_data.update({"garmin_auth": token, "state": AUTHORIZED})
+        await save_user(user_id, user_data)
+        return await message.reply(
+            "✅ Garmin Connect linked! Send me any workout plan to import."
+        )
+
     # Handle username entry
     if state == AWAIT_USERNAME:
         # Store username in temp session
@@ -111,11 +181,17 @@ async def text_handler(client: Client, message: Message):
         except Exception as e:
             temp_sessions.pop(user_id, None)
             await delete_user(user_id)
+            print(
+                f"[login] user={user_id} method={os.getenv('GARMIN_LOGIN_METHOD', 'garth')} "
+                f"err={type(e).__name__}: {e}",
+                flush=True,
+            )
+            traceback.print_exc()
             if "429" in str(e):
                 return await message.reply(
                     "Garmin is temporarily rate limiting logins. Please wait a few minutes and try /start again."
                 )
-            return await message.reply(f"Login failed: {e}. Use /start to try again.")
+            return await message.reply(f"Login failed: {type(e).__name__}: {e}. Use /start to try again.")
 
     # Handle workout import for authorized users
     if state == AUTHORIZED:

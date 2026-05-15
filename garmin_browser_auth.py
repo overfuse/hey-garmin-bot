@@ -44,8 +44,15 @@ def _get_oauth_consumer() -> dict:
     return resp.json()
 
 
-def _exchange_ticket_for_oauth1(ticket: str, consumer: dict) -> dict:
-    """Exchange an SSO ticket for an OAuth1 token."""
+def _exchange_ticket_for_oauth1(
+    ticket: str, consumer: dict, login_url: str = "https://sso.garmin.com/sso/embed"
+) -> dict:
+    """Exchange an SSO ticket for an OAuth1 token.
+
+    `login_url` must match the CAS `service` the ticket was issued for.
+    Defaults to the embed page (garth/curl flow); the browser flow passes
+    its own callback URL when the widget redirects there with the ticket.
+    """
     sess = OAuth1Session(
         consumer["consumer_key"],
         consumer["consumer_secret"],
@@ -53,7 +60,7 @@ def _exchange_ticket_for_oauth1(ticket: str, consumer: dict) -> dict:
     url = (
         f"https://connectapi.garmin.com/oauth-service/oauth/"
         f"preauthorized?ticket={ticket}"
-        f"&login-url=https://sso.garmin.com/sso/embed"
+        f"&login-url={login_url}"
         f"&accepts-mfa-tokens=true"
     )
     resp = sess.get(url, headers={"User-Agent": ANDROID_UA}, timeout=15)

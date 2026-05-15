@@ -1,5 +1,6 @@
 import garth
 from garth.http import Client as GarthClient
+import re
 import time
 import os
 from chatgpt import plan_to_json, plan_to_json_async
@@ -14,11 +15,41 @@ _last_login_time: float = 0.0
 _MIN_LOGIN_INTERVAL = 60.0  # seconds between SSO logins
 
 
-# --- Login method: "garth" (default), "curl", or "browser" ---
+# --- Login method: "garth" (default), "curl", "browser", or "web" ---
 #  * garth   — plain requests; cheap but blocked by Cloudflare on cloud IPs.
 #  * curl    — curl_cffi w/ Chrome TLS impersonation; bypasses CF JA3 fingerprinting.
 #  * browser — full Playwright Chromium; heaviest but solves JS challenges.
+#  * web     — user logs in to Garmin in *their own* browser (residential IP,
+#              so no Cloudflare block; MFA/CAPTCHA handled by a human; the
+#              password never reaches the bot), then pastes the resulting
+#              .../sso/embed?ticket=ST-... URL back into the chat. We exchange
+#              that ticket for a token server-side (not Cloudflare-gated).
 LOGIN_METHOD = os.getenv("GARMIN_LOGIN_METHOD", "garth")
+
+# Garmin's GAuth embed page. Garmin only honours service URLs on *.garmin.com,
+# so after login the browser lands on this same page with ?ticket=ST-...
+# appended — which the user copies from the address bar. The ticket is bound
+# to this service, so the default login-url in the OAuth1 exchange matches.
+GARMIN_SSO_LOGIN_URL = (
+    "https://sso.garmin.com/sso/embed"
+    "?id=gauth-widget"
+    "&embedWidget=true"
+    "&gauthHost=https://sso.garmin.com/sso"
+    "&clientId=GarminConnect"
+    "&locale=en_US"
+    "&service=https://sso.garmin.com/sso/embed"
+    "&redirectAfterAccountLoginUrl=https://sso.garmin.com/sso/embed"
+)
+
+_TICKET_RE = re.compile(r"ST-[A-Za-z0-9._\-]+")
+
+
+def extract_ticket(text: str) -> str | None:
+    """Pull an SSO service ticket (ST-...) out of a pasted URL or raw string."""
+    if not text:
+        return None
+    m = _TICKET_RE.search(text)
+    return m.group(0) if m else None
 
 
 def workout_url(workout_id) -> str:
@@ -71,6 +102,39 @@ async def login_to_garmin_curl(login: str, password: str) -> str:
     """Login via curl_cffi w/ Chrome TLS fingerprint. Bypasses CF JA3 blocks."""
     from garmin_curl_login import curl_login
     return await asyncio.to_thread(curl_login, login, password)
+
+
+def ticket_to_token(ticket: str, login_url: str | None = None) -> str:
+    """Exchange an SSO service ticket (ST-...) for a garth-compatible token.
+
+    Used by the browser-driven ("web") auth flow: the user completes the
+    Garmin SSO login in *their own* browser (residential IP, MFA/CAPTCHA
+    handled by a human), so only this token exchange runs server-side. The
+    OAuth1/OAuth2 endpoints aren't behind the same Cloudflare rule set as
+    /sso/signin, so this works from cloud egress IPs.
+
+    `login_url` must equal the CAS `service` the widget issued the ticket
+    for. When the widget redirects to our own callback, that callback URL
+    is the service; otherwise the SSO embed page is the default.
+    """
+    from garmin_browser_auth import (
+        _exchange_oauth1_for_oauth2,
+        _exchange_ticket_for_oauth1,
+        _get_oauth_consumer,
+        _to_garth_token,
+    )
+
+    consumer = _get_oauth_consumer()
+    if login_url:
+        oauth1 = _exchange_ticket_for_oauth1(ticket, consumer, login_url)
+    else:
+        oauth1 = _exchange_ticket_for_oauth1(ticket, consumer)
+    oauth2 = _exchange_oauth1_for_oauth2(oauth1, consumer)
+    return _to_garth_token(oauth1, oauth2)
+
+
+async def ticket_to_token_async(ticket: str, login_url: str | None = None) -> str:
+    return await asyncio.to_thread(ticket_to_token, ticket, login_url)
 
 
 def token_from_session(session_path: str = "~/.garth") -> str:

@@ -31,7 +31,10 @@ services:
       - .env
     environment:
       PYTHONUNBUFFERED: "1"
-      GARMIN_LOGIN_METHOD: "browser"
+      # "web": user logs in to Garmin in their own browser and pastes the
+      # post-login ?ticket=ST-... URL back into the chat (no creds to bot,
+      # no Cloudflare block). See garmin.py LOGIN_METHOD docstring.
+      GARMIN_LOGIN_METHOD: "web"
       MONGODB_URI: "mongodb://mongo:27017"
       REDIS_URL: "redis://redis:6379/0"
     command: ["python", "bot.py"]
