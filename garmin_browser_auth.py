@@ -6,6 +6,10 @@ Two modes:
   - Interactive (headless=False): opens browser for manual login
   - Automated (headless=True): fills credentials programmatically
 
+For the no-browser path (HTML embed-widget SSO over curl_cffi, "widget+cffi"),
+see garmin_curl_login.curl_login. This module also exposes the OAuth-exchange
+primitives (_exchange_*_curl) that flow reuses.
+
 Usage (standalone):
     python garmin_browser_auth.py                    # interactive
     python garmin_browser_auth.py -u EMAIL -p PASS   # automated headless
@@ -103,11 +107,11 @@ def _exchange_oauth1_for_oauth2(oauth1: dict, consumer: dict) -> dict:
 
 # --- curl_cffi variants -----------------------------------------------------
 # connectapi.garmin.com sits behind the same Cloudflare JA3 classifier as
-# /sso/signin: from cloud egress IPs (Railway etc.) plain requests/urllib3
-# get 429 on the OAuth exchange. We sign OAuth1 with oauthlib but send the
-# request via curl_cffi's Chrome TLS/HTTP2 impersonation so the handshake
-# looks like a real browser. (The consumer key/secret is the public one
-# from garth's S3 bucket, so computing the signature client-side is fine.)
+# /sso/signin: plain requests/urllib3 get 429 on the OAuth exchange. We sign
+# OAuth1 with oauthlib but send the request via curl_cffi's Chrome TLS/HTTP2
+# impersonation so the handshake looks like a real browser. (The consumer
+# key/secret is the public one from garth's S3 bucket, so computing the
+# signature client-side is fine.)
 
 IMPERSONATE = "chrome131"
 

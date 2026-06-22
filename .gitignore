@@ -4,3 +4,7 @@
 .DS_Store
 mongo_data
 __pycache__
+
+# Pyrogram Telegram session (contains bot auth keys — never commit)
+*.session
+*.session-journal

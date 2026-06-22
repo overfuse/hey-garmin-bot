@@ -13,6 +13,7 @@ from garmin import (
     ticket_to_token_async,
     looks_like_garth_token,
 )
+from garmin_curl_login import GarminInvalidCredentials
 from user import get_user, save_user, delete_user
 from session import temp_sessions
 from rate_limiter import check_rate_limit, record_request, get_user_stats, RateLimitExceeded, create_indexes
@@ -225,6 +226,11 @@ async def text_handler(client: Client, message: Message):
                 flush=True,
             )
             traceback.print_exc()
+            if isinstance(e, GarminInvalidCredentials):
+                return await message.reply(
+                    "❌ Incorrect Garmin email or password.\n"
+                    "Please use /start and try again."
+                )
             if "429" in str(e):
                 return await message.reply(
                     "Garmin is temporarily rate limiting logins. Please wait a few minutes and try /start again."
