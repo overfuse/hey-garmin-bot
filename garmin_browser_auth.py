@@ -17,15 +17,49 @@ Usage (standalone):
 
 import base64
 import json
+import os
 import re
 import time
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 import requests
 from requests_oauthlib import OAuth1Session
 
 OAUTH_CONSUMER_URL = "https://thegarth.s3.amazonaws.com/oauth_consumer.json"
 ANDROID_UA = "com.garmin.android.apps.connectmobile"
+
+# Railway (and many cloud) egress IPs are on Garmin's blocklist: the OAuth
+# exchange against connectapi.garmin.com returns 429 by *source IP* — curl_cffi
+# TLS impersonation doesn't help because the throttle is IP-based. Route those
+# requests through a Cloudflare Worker (CF's IP pool isn't on the blocklist).
+#   GARMIN_OAUTH_PROXY=https://<worker>.workers.dev
+#   GARMIN_OAUTH_PROXY_SECRET=<shared secret>   # optional, see worker code
+# The OAuth1 signature is computed over the canonical Garmin URL; we only swap
+# the wire host (path+query stay byte-identical) and tell the Worker the real
+# host via X-Garmin-Host, so Garmin still validates the signature.
+# NB: the SSO widget login (sso.garmin.com) is NOT IP-blocked, so only the
+# exchange calls go through the proxy. Unset the env var to run direct.
+_OAUTH_PROXY_BASE = (os.getenv("GARMIN_OAUTH_PROXY") or "").rstrip("/") or None
+_OAUTH_PROXY_SECRET = os.getenv("GARMIN_OAUTH_PROXY_SECRET", "")
+
+
+def _proxied_url(url: str) -> str:
+    """Point a Garmin URL at the Worker, preserving path+query, when enabled."""
+    if not _OAUTH_PROXY_BASE:
+        return url
+    parts = urlsplit(url)
+    suffix = parts.path + (f"?{parts.query}" if parts.query else "")
+    return _OAUTH_PROXY_BASE + suffix
+
+
+def _proxy_headers(url: str, headers: dict) -> dict:
+    """Add X-Garmin-Host (the real host) + shared secret, when enabled."""
+    if not _OAUTH_PROXY_BASE:
+        return headers
+    out = {**headers, "X-Garmin-Host": urlsplit(url).netloc}
+    if _OAUTH_PROXY_SECRET:
+        out["X-Proxy-Auth"] = _OAUTH_PROXY_SECRET
+    return out
 
 SSO_EMBED_URL = (
     "https://sso.garmin.com/sso/embed"
@@ -153,7 +187,10 @@ def _exchange_ticket_for_oauth1_curl(
     )
     uri, headers, _ = _oauth1_signed("GET", url, consumer, None)
     resp = cffi_requests.get(
-        uri, headers=headers, impersonate=IMPERSONATE, timeout=15
+        _proxied_url(uri),
+        headers=_proxy_headers(uri, headers),
+        impersonate=IMPERSONATE,
+        timeout=15,
     )
     resp.raise_for_status()
     parsed = parse_qs(resp.text)
@@ -172,7 +209,11 @@ def _exchange_oauth1_for_oauth2_curl(oauth1: dict, consumer: dict) -> dict:
         data["mfa_token"] = oauth1["mfa_token"]
     uri, headers, body = _oauth1_signed("POST", url, consumer, oauth1, data)
     resp = cffi_requests.post(
-        uri, data=body, headers=headers, impersonate=IMPERSONATE, timeout=15
+        _proxied_url(uri),
+        data=body,
+        headers=_proxy_headers(uri, headers),
+        impersonate=IMPERSONATE,
+        timeout=15,
     )
     resp.raise_for_status()
     token = resp.json()

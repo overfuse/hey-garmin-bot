@@ -8,3 +8,6 @@ __pycache__
 # Pyrogram Telegram session (contains bot auth keys — never commit)
 *.session
 *.session-journal
+
+# wrangler local cache (Cloudflare account id/name — not for a public repo)
+.wrangler/

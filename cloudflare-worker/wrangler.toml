@@ -1,0 +1,7 @@
+name = "garmin-oauth-proxy"
+main = "garmin-oauth-proxy.js"
+compatibility_date = "2024-09-23"
+
+# PROXY_SECRET is a secret, not a plaintext var. Set it with:
+#   wrangler secret put PROXY_SECRET
+# (or in the Cloudflare dashboard: Worker > Settings > Variables > Secret).
