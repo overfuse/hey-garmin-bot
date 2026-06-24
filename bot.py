@@ -1,17 +1,13 @@
 import os
 import traceback
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import Message
 from dotenv import load_dotenv
 from garmin import (
     login_to_garmin,
     upload_workout_to_garmin_async,
     refresh_token_async,
     workout_url,
-    GARMIN_SSO_LOGIN_URL,
-    extract_ticket,
-    ticket_to_token_async,
-    looks_like_garth_token,
 )
 from garmin_curl_login import GarminInvalidCredentials
 from user import get_user, save_user, delete_user
@@ -28,12 +24,7 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 # States
 AWAIT_USERNAME = "await_username"
 AWAIT_PASSWORD = "await_password"
-AWAIT_WEB_AUTH = "await_web_auth"
 AUTHORIZED = "authorized"
-
-# When "web", /start hands the user a self-service Garmin SSO link instead
-# of collecting credentials in chat (see garmin_auth_web.py).
-LOGIN_METHOD = os.getenv("GARMIN_LOGIN_METHOD", "garth")
 
 # Initialize Pyrogram Client
 app = Client("garmin_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -47,28 +38,6 @@ async def start_handler(client: Client, message: Message):
         return await message.reply(
             "You are already logged in! Send me a workout plan to import.\n"
             "Use /logout first if you want to switch accounts."
-        )
-    if LOGIN_METHOD == "web":
-        # Browser-driven flow: the user signs in to Garmin in their OWN
-        # browser (residential IP -> no Cloudflare block; MFA/CAPTCHA handled
-        # by a human; password never reaches the bot), then pastes back
-        # whatever the post-login page shows. extract_ticket() greps the
-        # ST-... out of either the address-bar URL or the JSON the page
-        # renders ({"serviceTicket":"ST-..."}), so either works.
-        await save_user(user_id, {"state": AWAIT_WEB_AUTH})
-        return await message.reply(
-            "**Welcome!** Let's connect your Garmin Connect account — "
-            "your password goes straight to Garmin, never to this bot.\n\n"
-            "1. Tap **Sign in to Garmin** below and log in.\n"
-            "2. After login the page shows a small JSON "
-            "(`{\"serviceTicket\":\"ST-...\"}`).\n"
-            "3. Paste it back here — the JSON **or** the page's full "
-            "address-bar URL, either works.\n\n"
-            "_If you hit a rate-limit error, use /token to generate the "
-            "token on your own machine instead._",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🔐 Sign in to Garmin", url=GARMIN_SSO_LOGIN_URL)]]
-            ),
         )
 
     # Initialize persistent state
@@ -103,23 +72,6 @@ async def stats_handler(client: Client, message: Message):
     await message.reply(response)
 
 
-# /token command: how to generate a token off-server (bypasses IP rate limit)
-@app.on_message(filters.command("token") & filters.private)
-async def token_handler(client: Client, message: Message):
-    await message.reply(
-        "**Generate the token on your own machine** (residential IP — "
-        "Garmin won't rate-limit it), then paste the result here.\n\n"
-        "In the bot's repo folder run:\n"
-        "```\npython make_garmin_token.py\n```\n"
-        "It opens the Garmin login, you sign in, paste back the "
-        "post-login URL/JSON when asked, and it prints a long token "
-        "string. Copy that whole string and paste it to me — I'll store "
-        "it without calling Garmin at all.",
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("🔐 Sign in to Garmin", url=GARMIN_SSO_LOGIN_URL)]]
-        ),
-    )
-
 # Text handler for login and workout messages
 @app.on_message(filters.text & filters.private)
 async def text_handler(client: Client, message: Message):
@@ -135,57 +87,6 @@ async def text_handler(client: Client, message: Message):
         return await message.reply("pong")
 
     state = user_data.get("state")
-
-    # Web flow: accept either a ready-made garth token (best — zero Garmin
-    # calls from our IP) or an ST-... ticket/URL/JSON to exchange server-side.
-    if state == AWAIT_WEB_AUTH:
-        pasted_token = looks_like_garth_token(message.text)
-        if pasted_token:
-            user_data.update({"garmin_auth": pasted_token, "state": AUTHORIZED})
-            await save_user(user_id, user_data)
-            print(f"[web-auth] user={user_id} linked via pasted token",
-                  flush=True)
-            return await message.reply(
-                "✅ Garmin Connect linked! Send me any workout plan to import."
-            )
-
-        ticket = extract_ticket(message.text)
-        if not ticket:
-            return await message.reply(
-                "I couldn't find a Garmin token or `ST-...` ticket in that.\n"
-                "Sign in below, then paste back the JSON the page shows "
-                "(`{\"serviceTicket\":\"ST-...\"}`) — or the full "
-                "address-bar URL. Either works.",
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("🔐 Sign in to Garmin", url=GARMIN_SSO_LOGIN_URL)]]
-                ),
-            )
-        await message.reply("Got the ticket — finishing sign-in...")
-        try:
-            token = await ticket_to_token_async(ticket)
-        except Exception as e:
-            print(f"[web-auth] user={user_id} exchange failed "
-                  f"{type(e).__name__}: {e}", flush=True)
-            traceback.print_exc()
-            hint = (
-                "Garmin is rate-limiting this server's IP. Generate the "
-                "token on your own machine and paste it here instead — "
-                "see /token for the one-liner."
-                if "429" in str(e)
-                else "The ticket is single-use and expires fast — tap the "
-                "button again for a fresh login, then paste the new URL."
-            )
-            return await message.reply(
-                f"Sign-in failed: {type(e).__name__}: {e}\n{hint}",
-                reply_markup=InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("🔐 Sign in to Garmin", url=GARMIN_SSO_LOGIN_URL)]]
-                ),
-            )
-        user_data.update({"garmin_auth": token, "state": AUTHORIZED})
-        await save_user(user_id, user_data)
-        return await message.reply(
-            "✅ Garmin Connect linked! Send me any workout plan to import."
-        )
 
     # Handle username entry
     if state == AWAIT_USERNAME:
@@ -211,6 +112,11 @@ async def text_handler(client: Client, message: Message):
             token = await login_to_garmin(username, password)
             # Clean up raw credentials
             temp_sessions.pop(user_id, None)
+            # Scrub the password from the chat history now that login succeeded.
+            try:
+                await message.delete()
+            except Exception:
+                pass
             # Store only token and authorized state
             user_data.update({"garmin_auth": token, "state": AUTHORIZED})
             await save_user(user_id, user_data)
@@ -253,7 +159,6 @@ async def text_handler(client: Client, message: Message):
             workout_id, workout_json, processing_time = await upload_workout_to_garmin_async(
                 user_data["garmin_auth"],
                 workout_data,
-                user_id
             )
 
             # Record successful request
@@ -283,7 +188,7 @@ async def text_handler(client: Client, message: Message):
                     await save_user(user_id, user_data)
                     await message.reply("Session refreshed, retrying upload...")
                     workout_id, workout_json, processing_time = await upload_workout_to_garmin_async(
-                        new_token, workout_data, user_id
+                        new_token, workout_data
                     )
                     await record_request(user_id)
                     await log_workout_request(

@@ -43,7 +43,8 @@ Try it live: [HeyGarminBot on Telegram](https://t.me/HeyGarminBot)
 ├── SYSTEM_PROMPT.md    # AI prompt for workout parsing
 ├── Dockerfile          # Docker image definition
 ├── docker-compose.yml  # Compose file for bot + MongoDB + Redis
-├── requirements.txt    # Python dependencies
+├── pyproject.toml      # Project metadata & dependencies (uv)
+├── uv.lock             # Locked, resolved dependency versions (uv)
 ├── .env                # Environment variables (not checked in)
 └── mongo_data/         # Local MongoDB data volume
 ```
@@ -53,6 +54,7 @@ Try it live: [HeyGarminBot on Telegram](https://t.me/HeyGarminBot)
 ### Prerequisites
 
 - Docker & Docker Compose installed
+- [uv](https://docs.astral.sh/uv/) installed (for local development)
 - Telegram Bot credentials: `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_BOT_TOKEN`
 
 ### Environment Variables
@@ -101,14 +103,14 @@ RATE_LIMIT_MONTHLY=200
 
 ### Local Development (without Docker)
 
-1. Install dependencies:
+1. Install dependencies (creates `.venv` from `uv.lock`):
    ```bash
-   pip install -r requirements.txt
+   uv sync
    ```
 2. Ensure MongoDB is running locally on `mongodb://localhost:27017`.
 3. Run the bot:
    ```bash
-   python bot.py
+   uv run bot.py
    ```
 
 ## Rate Limiting

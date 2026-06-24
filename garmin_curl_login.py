@@ -26,7 +26,13 @@ import sys
 
 from curl_cffi import requests as cffi_requests
 
-from garmin_browser_auth import (
+from garmin_oauth import (
+    IMPERSONATE,
+    SIGNIN_PARAMS,
+    SSO_BASE,
+    SSO_EMBED_PARAMS,
+    SSO_MFA,
+    TICKET_RE,
     _exchange_oauth1_for_oauth2_curl,
     _exchange_ticket_for_oauth1_curl,
     _get_oauth_consumer,
@@ -35,27 +41,7 @@ from garmin_browser_auth import (
 
 CSRF_RE = re.compile(r'name="_csrf"\s+value="(.+?)"')
 TITLE_RE = re.compile(r"<title>(.+?)</title>")
-TICKET_RE = re.compile(r'embed\?ticket=([^"]+)"')
 
-SSO_BASE = "https://sso.garmin.com/sso"
-SSO_EMBED = f"{SSO_BASE}/embed"
-SSO_MFA = f"{SSO_BASE}/verifyMFA/loginEnterMfaCode"
-
-SSO_EMBED_PARAMS = {
-    "id": "gauth-widget",
-    "embedWidget": "true",
-    "gauthHost": SSO_BASE,
-}
-SIGNIN_PARAMS = {
-    **SSO_EMBED_PARAMS,
-    "gauthHost": SSO_EMBED,
-    "service": SSO_EMBED,
-    "source": SSO_EMBED,
-    "redirectAfterAccountLoginUrl": SSO_EMBED,
-    "redirectAfterAccountCreationUrl": SSO_EMBED,
-}
-
-IMPERSONATE = "chrome131"
 TIMEOUT = 20
 
 
@@ -185,7 +171,7 @@ def _diagnose_login_failure(r, title: str) -> None:
     if 'class="g-recaptcha"' in low or "data-sitekey" in low:
         raise GarminLoginFailed(
             "Garmin is asking for a CAPTCHA, which the automated login can't "
-            "solve. Try again later, or use the browser sign-in method."
+            "solve. Please wait a few minutes and try again."
         )
     raise GarminLoginFailed(
         f"Garmin sign-in failed (status {r.status_code}). Please try again."
