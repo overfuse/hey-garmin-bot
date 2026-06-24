@@ -26,6 +26,16 @@ _MIN_LOGIN_INTERVAL = 60.0  # seconds between SSO logins
 #              that ticket for a token server-side (not Cloudflare-gated).
 LOGIN_METHOD = os.getenv("GARMIN_LOGIN_METHOD", "garth")
 
+# Startup diagnostic: confirms from the deploy logs whether the OAuth proxy env
+# was actually picked up (the #1 cause of "still 429 on Railway" is the proxy
+# being unset/undeployed, so traffic still goes direct to Garmin's blocked IP).
+_proxy_dbg = os.getenv("GARMIN_OAUTH_PROXY")
+print(
+    f"[garmin] login_method={LOGIN_METHOD} "
+    f"oauth_proxy={'ON ' + _proxy_dbg if _proxy_dbg else 'OFF (direct)'}",
+    flush=True,
+)
+
 # Garmin's GAuth embed page. Garmin only honours service URLs on *.garmin.com,
 # so after login the browser lands on this same page with ?ticket=ST-...
 # appended — which the user copies from the address bar. The ticket is bound
