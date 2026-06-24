@@ -201,6 +201,47 @@ async def refresh_token_async(token: str) -> str:
     return await asyncio.to_thread(refresh_token, token)
 
 
+def _install_garth_proxy() -> None:
+    """Route garth's connectapi.garmin.com calls through the OAuth proxy.
+
+    The workout upload uses garth's plain-requests client straight to
+    connectapi.garmin.com, which Railway's egress IP is 429-blocked on (the
+    same IP block as the OAuth exchange). Mount a requests adapter that
+    rewrites that host to the Cloudflare Worker (which re-originates from a
+    non-blocked IP) and adds the X-Garmin-Host / shared-secret headers the
+    Worker expects. The worker hop also sidesteps garth's Cloudflare JA3
+    fingerprint, since the TLS connection is now to workers.dev.
+
+    No-op when GARMIN_OAUTH_PROXY is unset (local / residential IPs).
+    """
+    from garmin_browser_auth import _OAUTH_PROXY_BASE, _OAUTH_PROXY_SECRET
+
+    if not _OAUTH_PROXY_BASE:
+        return
+
+    from requests.adapters import HTTPAdapter
+    from urllib.parse import urlsplit
+
+    base = _OAUTH_PROXY_BASE
+    secret = _OAUTH_PROXY_SECRET
+
+    class _GarminProxyAdapter(HTTPAdapter):
+        def send(self, request, **kwargs):
+            parts = urlsplit(request.url)
+            if parts.netloc == "connectapi.garmin.com":
+                request.headers["X-Garmin-Host"] = parts.netloc
+                if secret:
+                    request.headers["X-Proxy-Auth"] = secret
+                # Drop the stale Host so urllib3 derives it from the worker URL.
+                request.headers.pop("Host", None)
+                request.url = base + parts.path + (
+                    f"?{parts.query}" if parts.query else ""
+                )
+            return super().send(request, **kwargs)
+
+    garth.client.sess.mount("https://connectapi.garmin.com", _GarminProxyAdapter())
+
+
 def upload_workout_to_garmin(token: str, workout_plan: str) -> str:
     workout_json = plan_to_json(workout_plan)
     garmin_json = convert(workout_json)
@@ -209,6 +250,7 @@ def upload_workout_to_garmin(token: str, workout_plan: str) -> str:
 
 def upload_garmin_payload(token: str, garmin_json: dict) -> str:
     garth.client.loads(token)
+    _install_garth_proxy()
     result = garth.connectapi("/workout-service/workout", method="POST", json=garmin_json)
     return result["workoutId"]
 
@@ -231,6 +273,7 @@ async def upload_workout_to_garmin_async(
 
     def _upload():
         garth.client.loads(token)
+        _install_garth_proxy()
         res = garth.connectapi("/workout-service/workout", method="POST", json=garmin_json)
         return res["workoutId"]
 
