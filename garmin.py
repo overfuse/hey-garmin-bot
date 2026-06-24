@@ -214,13 +214,22 @@ async def refresh_token_async(token: str) -> str:
 def _install_garth_proxy() -> None:
     """Route garth's connectapi.garmin.com calls through the OAuth proxy.
 
-    The workout upload uses garth's plain-requests client straight to
-    connectapi.garmin.com, which Railway's egress IP is 429-blocked on (the
-    same IP block as the OAuth exchange). Mount a requests adapter that
-    rewrites that host to the Cloudflare Worker (which re-originates from a
-    non-blocked IP) and adds the X-Garmin-Host / shared-secret headers the
-    Worker expects. The worker hop also sidesteps garth's Cloudflare JA3
-    fingerprint, since the TLS connection is now to workers.dev.
+    Two garth call sites hit connectapi.garmin.com, which Railway's egress IP
+    is 429-blocked on (the same IP block as the OAuth exchange):
+      1. the workout upload (garth.connectapi), and
+      2. the OAuth2 *refresh* garth does internally when the token is expired
+         (Client.request -> refresh_oauth2 -> sso.exchange).
+
+    Mount a requests adapter that rewrites that host to the Cloudflare Worker
+    (which re-originates from a non-blocked IP) and adds the X-Garmin-Host /
+    shared-secret headers the Worker expects. The worker hop also sidesteps
+    garth's Cloudflare JA3 fingerprint (TLS is now to workers.dev).
+
+    Mount on the generic "https://" prefix, NOT "https://connectapi.garmin.com":
+    garth's exchange session (GarminOAuth1Session) only inherits the parent's
+    "https://" adapter, so a host-specific mount would miss the refresh path.
+    The adapter only rewrites connectapi.garmin.com and passes everything else
+    (e.g. sso.garmin.com) through untouched.
 
     No-op when GARMIN_OAUTH_PROXY is unset (local / residential IPs).
     """
@@ -234,6 +243,10 @@ def _install_garth_proxy() -> None:
 
     base = _OAUTH_PROXY_BASE
     secret = _OAUTH_PROXY_SECRET
+
+    # Preserve garth's existing retry policy on the adapter we replace.
+    _existing = garth.client.sess.adapters.get("https://")
+    _max_retries = getattr(_existing, "max_retries", 0)
 
     class _GarminProxyAdapter(HTTPAdapter):
         def send(self, request, **kwargs):
@@ -249,7 +262,7 @@ def _install_garth_proxy() -> None:
                 )
             return super().send(request, **kwargs)
 
-    garth.client.sess.mount("https://connectapi.garmin.com", _GarminProxyAdapter())
+    garth.client.sess.mount("https://", _GarminProxyAdapter(max_retries=_max_retries))
 
 
 def upload_workout_to_garmin(token: str, workout_plan: str) -> str:
