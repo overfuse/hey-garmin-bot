@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 # --- builder: resolve & install locked deps into /app/.venv with uv ----------
 FROM python:3.13-slim AS builder
 
@@ -17,9 +15,10 @@ WORKDIR /app
 # Install dependencies only (not the project) so editing app code doesn't bust
 # this cached layer. --frozen makes the build fail if uv.lock is out of sync
 # with pyproject.toml, guaranteeing the image matches the lock exactly.
+# (No BuildKit cache mount: Railway builds with the legacy Docker builder,
+# which doesn't support RUN --mount.)
 COPY pyproject.toml uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project
 
 # --- runtime: just CPython + the baked venv (no uv, no build tools) -----------
 FROM python:3.13-slim
