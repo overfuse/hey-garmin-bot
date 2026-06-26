@@ -10,15 +10,15 @@ def _load(path: str) -> str:
 
 def test_plan_to_json_live_matches_example_when_api_key_present():
     """
-    Интеграционный тест БЕЗ моков. Требует OPENAI_API_KEY в окружении.
+    Интеграционный тест БЕЗ моков. Требует ключ выбранного провайдера в окружении.
     Сравнивает результат plan_to_json с эталонным примером из examples/intervals/july-22.json.
     Если ключа нет — тест пропускается.
     """
-    if not os.environ.get("OPENAI_API_KEY"):
+    if not (os.environ.get("OPENAI_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")):
         import pytest
-        pytest.skip("OPENAI_API_KEY is not set; skipping live OpenAI test")
+        pytest.skip("No LLM provider API key set; skipping live test")
 
-    import chatgpt
+    import workout_ai as chatgpt
 
     prompt_text = _load("examples/prompts/hey-track-07-22.txt")
     expected_json = json.loads(_load("examples/intervals/july-22.json"))

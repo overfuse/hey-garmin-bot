@@ -2,14 +2,14 @@ import garth
 from garth.http import Client as GarthClient
 import time
 import os
-from chatgpt import plan_to_json, plan_to_json_async
+from workout_ai import plan_to_json, plan_to_json_async
 from garmin_convert import convert
 import asyncio
 
-# Global lock to serialize the OpenAI plan->JSON call (the only token-costing,
+# Global lock to serialize the LLM plan->JSON call (the only token-costing,
 # billable step). Concurrent users can't spike token spend past one in-flight
-# OpenAI request at a time; per-user quotas live in rate_limiter.py.
-_openai_lock = asyncio.Lock()
+# request at a time; per-user quotas live in rate_limiter.py.
+_llm_lock = asyncio.Lock()
 
 
 # --- Login method: "garth" (default) or "curl" ---
@@ -186,8 +186,8 @@ async def upload_workout_to_garmin_async(
     """
     start_time = time.time()
 
-    # Serialize the billable OpenAI call so concurrent users can't spike spend.
-    async with _openai_lock:
+    # Serialize the billable LLM call so concurrent users can't spike spend.
+    async with _llm_lock:
         workout_json = await plan_to_json_async(workout_plan)
     garmin_json = convert(workout_json)
 

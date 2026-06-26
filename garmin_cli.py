@@ -7,7 +7,7 @@ import argparse
 import getpass
 from dotenv import load_dotenv
 from garmin import login_to_garmin, upload_workout_to_garmin, token_from_session, upload_garmin_payload, workout_url
-from chatgpt import plan_to_json
+from workout_ai import plan_to_json
 from garmin_convert import convert
 from validate_garmin import validate_garmin_workout
 

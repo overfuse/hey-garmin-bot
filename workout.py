@@ -2,7 +2,7 @@
 
 import sys
 import garth
-from chatgpt import plan_to_json
+from workout_ai import plan_to_json
 from garmin_convert import convert
 from garmin import workout_url
 from typing import Dict, Any
