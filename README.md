@@ -32,7 +32,7 @@ Try it live: [HeyGarminBot on Telegram](https://t.me/HeyGarminBot)
 
 ```text
 ├── bot.py              # Main script for the Telegram bot
-├── chatgpt.py          # OpenAI integration for workout generation
+├── workout_ai/         # Workout parser: provider-agnostic (openai/claude) plan_to_json
 ├── garmin.py           # Garmin Connect API integration
 ├── garmin_convert.py   # Workout JSON to Garmin format converter
 ├── rate_limiter.py     # Redis-based rate limiting with fallback
@@ -41,6 +41,7 @@ Try it live: [HeyGarminBot on Telegram](https://t.me/HeyGarminBot)
 ├── session.py          # Temporary session storage
 ├── workout_schema.json # JSON Schema for workout validation
 ├── SYSTEM_PROMPT.md    # AI prompt for workout parsing
+├── evals/              # Multi-provider eval suite for the parser (see evals/README.md)
 ├── Dockerfile          # Docker image definition
 ├── docker-compose.yml  # Compose file for bot + MongoDB + Redis
 ├── pyproject.toml      # Project metadata & dependencies (uv)
@@ -112,6 +113,18 @@ RATE_LIMIT_MONTHLY=200
    ```bash
    uv run bot.py
    ```
+
+## Evals
+
+The `evals/` package benchmarks how well different LLM providers parse free-text workouts into the structured workout schema. Each case scores against the known failure modes (dropped paces, mis-budgeted distances, flaky rep counts, rest misplaced outside the repeat).
+
+```bash
+uv run python -m evals.run                 # all models with a provider key set
+uv run python -m evals.run haiku gpt-5     # filter models by label substring
+EVAL_RUNS=3 uv run python -m evals.run     # repeat each case N times (recommended)
+```
+
+The reasoning/thinking models are nondeterministic, so use `EVAL_RUNS=3+` before trusting a ranking. See [`evals/README.md`](evals/README.md) for the cases, scoring, models, and how to add a provider.
 
 ## Rate Limiting
 

@@ -11,3 +11,6 @@ __pycache__
 
 # wrangler local cache (Cloudflare account id/name — not for a public repo)
 .wrangler/
+
+# eval run output — regenerated and nondeterministic on every `python -m evals.run`
+evals/last_results.json
