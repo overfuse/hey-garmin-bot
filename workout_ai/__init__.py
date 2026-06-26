@@ -12,7 +12,7 @@ load_dotenv()
 # provider's key is needed at runtime.
 #   WORKOUT_AI_PROVIDER  "claude" | "openai"   (default: claude)
 #   WORKOUT_AI_MODEL     optional override of the provider's default model
-PROVIDER = os.environ.get("WORKOUT_AI_PROVIDER", "claude").lower()
+PROVIDER = os.environ.get("WORKOUT_AI_PROVIDER", "openai").lower()
 MODEL = os.environ.get("WORKOUT_AI_MODEL")
 
 # One SYSTEM_PROMPT.md is shared by every provider. It lives at the repo root and
