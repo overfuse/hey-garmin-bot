@@ -9,10 +9,12 @@ DEFAULT_MODEL = "claude-haiku-4-5"
 
 # Haiku uses extended thinking so it reliably handles arithmetic-heavy budgeting
 # (e.g. "1 km in 200/200 mode" -> exactly five 200 m segments); without it Haiku
-# gets that right only ~1/3 of the time. budget_tokens must be < max_tokens, and
-# max_tokens has to leave room for both the thinking and the JSON output.
+# gets that right only ~1/3 of the time. max_tokens caps thinking + visible output
+# combined, so it needs generous headroom above budget_tokens or a long thinking
+# pass truncates the JSON (stop_reason "max_tokens"). Billing is by actual tokens
+# used, not the cap, so the headroom is free insurance.
 THINKING_BUDGET = 2000
-MAX_TOKENS = 4000
+MAX_TOKENS = 8000
 
 
 async def plan(system_prompt: str, description: str, model: str) -> Workout:

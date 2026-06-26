@@ -10,10 +10,10 @@ load_dotenv()
 
 # Provider selection via env. Both API keys can live in .env; only the selected
 # provider's key is needed at runtime.
-#   PLAN_PROVIDER  "openai" | "claude"   (default: claude)
-#   PLAN_MODEL     optional override of the provider's default model
-PROVIDER = os.environ.get("PLAN_PROVIDER", "claude").lower()
-MODEL = os.environ.get("PLAN_MODEL")
+#   WORKOUT_AI_PROVIDER  "claude" | "openai"   (default: claude)
+#   WORKOUT_AI_MODEL     optional override of the provider's default model
+PROVIDER = os.environ.get("WORKOUT_AI_PROVIDER", "claude").lower()
+MODEL = os.environ.get("WORKOUT_AI_MODEL")
 
 # One SYSTEM_PROMPT.md is shared by every provider. It lives at the repo root and
 # is resolved relative to this package, so it loads regardless of the CWD.
@@ -30,7 +30,7 @@ async def plan_to_json_async(description: str) -> dict:
     provider = REGISTRY.get(PROVIDER)
     if provider is None:
         raise ValueError(
-            f"Unknown PLAN_PROVIDER={PROVIDER!r}; expected one of {sorted(REGISTRY)}"
+            f"Unknown WORKOUT_AI_PROVIDER={PROVIDER!r}; expected one of {sorted(REGISTRY)}"
         )
 
     system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
