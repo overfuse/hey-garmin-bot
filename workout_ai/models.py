@@ -4,12 +4,25 @@ from pydantic import BaseModel, Field, field_validator
 
 PACE = r"^[0-9]+:[0-5][0-9]$"  # mm:ss per km
 
+# Bounds are semantic, not just structural. The schema guarantees an int; it does
+# not guarantee a *runnable* workout. Without these, `repeat: 100000` builds a
+# payload with 100k steps and `pace: "0:00"` divides by zero in the converter's
+# pace window. Structured output protects the shape; these protect the meaning.
+MAX_DISTANCE_M = 100_000  # 100 km — beyond any single interval step
+MAX_REST_S = 3_600
+MAX_REPEAT = 100
+MIN_PACE_S = 90    # 1:30/km — faster than the world record
+MAX_PACE_S = 1200  # 20:00/km — slower than walking
+
 
 def _pad_pace(value: Optional[str]) -> Optional[str]:
     """Zero-pad the minutes so pace is always mm:ss (e.g. '4:20' -> '04:20')."""
     if value is None:
         return None
     minutes, seconds = value.split(":")
+    total = int(minutes) * 60 + int(seconds)
+    if not MIN_PACE_S <= total <= MAX_PACE_S:
+        raise ValueError(f"pace {value} is outside {MIN_PACE_S}-{MAX_PACE_S} s/km")
     return f"{int(minutes):02d}:{seconds}"
 
 
@@ -17,7 +30,7 @@ class RunStep(BaseModel):
     """A running segment. Omit 'pace' to model an easy recovery jog."""
 
     type: Literal["run"]
-    distance: int = Field(ge=1, description="Distance in metres")
+    distance: int = Field(ge=1, le=MAX_DISTANCE_M, description="Distance in metres")
     pace: Optional[str] = Field(None, pattern=PACE, description="Target pace (min:sec per km)")
 
     _pad = field_validator("pace")(_pad_pace)
@@ -27,14 +40,14 @@ class RestStep(BaseModel):
     """Passive or standing rest."""
 
     type: Literal["rest"]
-    rest: int = Field(ge=1, description="Rest duration in seconds")
+    rest: int = Field(ge=1, le=MAX_REST_S, description="Rest duration in seconds")
 
 
 class RecoveryStep(BaseModel):
     """An active recovery jog segment without a target pace."""
 
     type: Literal["recovery"]
-    distance: int = Field(ge=1, description="Distance in metres")
+    distance: int = Field(ge=1, le=MAX_DISTANCE_M, description="Distance in metres")
 
 
 # A repeat group only ever holds leaf steps — workouts never nest a repeat inside
@@ -47,7 +60,7 @@ class RepeatGroup(BaseModel):
     """A grouping that repeats its internal steps in order."""
 
     type: Literal["repeat"]
-    repeat: int = Field(ge=1, description="Number of repetitions")
+    repeat: int = Field(ge=1, le=MAX_REPEAT, description="Number of repetitions")
     steps: List[LeafElement] = Field(description="Ordered list of steps to repeat")
 
 
@@ -60,14 +73,14 @@ Element = Union[RunStep, RestStep, RecoveryStep, RepeatGroup]
 class Segment(BaseModel):
     """Optional easy running before/after the main set (lap-based if distance omitted)."""
 
-    distance: Optional[int] = Field(None, ge=1, description="Distance in metres")
+    distance: Optional[int] = Field(None, ge=1, le=MAX_DISTANCE_M, description="Distance in metres")
     pace: Optional[str] = Field(None, pattern=PACE, description="Optional target pace (min:sec per km)")
 
     _pad = field_validator("pace")(_pad_pace)
 
 
 class Workout(BaseModel):
-    name: str = Field(description="Friendly workout name (e.g. '10×300/100/200 + rest')")
+    name: str = Field(max_length=100, description="Friendly workout name (e.g. '10×300/100/200 + rest')")
     warmup: Optional[Segment] = None
     intervals: List[Element] = Field(description="Main workout segment of run/rest steps or repeat groups")
     cooldown: Optional[Segment] = None

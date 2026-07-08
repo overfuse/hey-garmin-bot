@@ -33,13 +33,28 @@ const ALLOWED_HOSTS = new Set([
 
 const DEFAULT_HOST = "connectapi.garmin.com";
 
+/**
+ * Constant-time string compare. A plain `!==` leaks the secret's prefix through
+ * response timing, one byte at a time.
+ */
+function secretMatches(provided, expected) {
+  const a = new TextEncoder().encode(provided);
+  const b = new TextEncoder().encode(expected);
+  if (a.byteLength !== b.byteLength) return false;
+  return crypto.subtle.timingSafeEqual(a, b);
+}
+
 export default {
   async fetch(request, env) {
-    // Optional shared secret so the Worker isn't an open proxy.
-    if (env.PROXY_SECRET) {
-      if (request.headers.get("X-Proxy-Auth") !== env.PROXY_SECRET) {
-        return new Response("forbidden", { status: 403 });
-      }
+    // The shared secret is REQUIRED, not optional. Treating it as optional meant a
+    // missing binding silently turned this into an open proxy to Garmin's SSO and
+    // API — a deploy typo, not an attack, was enough to expose it.
+    if (!env.PROXY_SECRET) {
+      console.error("PROXY_SECRET is not bound; refusing to proxy");
+      return new Response("proxy misconfigured", { status: 500 });
+    }
+    if (!secretMatches(request.headers.get("X-Proxy-Auth") || "", env.PROXY_SECRET)) {
+      return new Response("forbidden", { status: 403 });
     }
 
     const inUrl = new URL(request.url);

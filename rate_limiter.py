@@ -1,280 +1,247 @@
+"""Per-user sliding-window rate limiting, backed by Redis.
+
+Design
+------
+One sorted set per user, `rate_limit:{user_id}`. Each admitted request adds one
+member scored with its Unix timestamp. A window's usage is the number of members
+scored within it, so hour/day/month all read off the same set.
+
+Two properties this module exists to guarantee, both of which the previous
+implementation silently violated:
+
+1. **Check-and-increment is atomic.** Counting and recording happen inside one
+   Lua script, so concurrent requests cannot both observe `used == cap - 1` and
+   both be admitted. The caller consumes quota *before* doing the billable work,
+   and explicitly refunds it if that work fails.
+
+2. **A rejection is a result, not an error.** `RateLimitExceeded` is raised on
+   the happy path when a user is over quota; it must never be conflated with
+   `RateLimiterUnavailable`, which means the limiter itself is broken. Catching
+   the two together is what turned this limiter into a no-op.
+
+Failure policy is fail-closed by default: if Redis is unreachable we refuse the
+request rather than silently admitting everyone. Set RATE_LIMIT_FAIL_OPEN=1 to
+invert that. Running with no Redis at all requires RATE_LIMIT_DISABLED=1, so a
+missing REDIS_URL in a deploy is a startup error rather than a silent bypass.
+"""
+
+import math
 import os
 import time
-from typing import Optional
-from collections import defaultdict
-from datetime import datetime
+import uuid
 
-# Configurable limits
-HOURLY_LIMIT = int(os.getenv("RATE_LIMIT_HOURLY", "10"))
-DAILY_LIMIT = int(os.getenv("RATE_LIMIT_DAILY", "50"))
-MONTHLY_LIMIT = int(os.getenv("RATE_LIMIT_MONTHLY", "200"))
+# Configurable limits. (label, window_seconds, cap) — ordered narrowest first so
+# the most specific limit is the one reported to the user.
+WINDOWS = (
+    ("hourly", 3600, int(os.getenv("RATE_LIMIT_HOURLY", "10"))),
+    ("daily", 86400, int(os.getenv("RATE_LIMIT_DAILY", "50"))),
+    ("monthly", 2592000, int(os.getenv("RATE_LIMIT_MONTHLY", "200"))),
+)
 
-# Redis configuration (optional)
-REDIS_URL = os.getenv("REDIS_URL", "")  # e.g., "redis://localhost:6379/0"
+# Keep the key alive slightly longer than the widest window we count over.
+_WIDEST = max(w for _, w, _ in WINDOWS)
+KEY_TTL = _WIDEST + 86400
 
-# Global state
+REDIS_URL = os.getenv("REDIS_URL", "")
+DISABLED = os.getenv("RATE_LIMIT_DISABLED", "") == "1"
+FAIL_OPEN = os.getenv("RATE_LIMIT_FAIL_OPEN", "") == "1"
+
 redis_client = None
-redis_available = False
-in_memory_store = defaultdict(list)  # Fallback: {user_id: [timestamps]}
+_consume_script = None
 
 
 class RateLimitExceeded(Exception):
-    """Raised when user exceeds rate limit"""
-    pass
+    """The user is over quota. A normal outcome — never catch this as an error."""
+
+    def __init__(self, scope: str, cap: int, retry_after: int):
+        self.scope = scope
+        self.cap = cap
+        self.retry_after = retry_after
+        super().__init__(self._message())
+
+    def _message(self) -> str:
+        if self.scope == "hourly":
+            mins = max(1, math.ceil(self.retry_after / 60))
+            return f"Hourly limit reached ({self.cap} per hour). Try again in {mins} minute(s)."
+        if self.scope == "daily":
+            hours = max(1, math.ceil(self.retry_after / 3600))
+            return f"Daily limit reached ({self.cap} per day). Try again in {hours} hour(s)."
+        days = max(1, math.ceil(self.retry_after / 86400))
+        return f"Monthly limit reached ({self.cap} per month). Try again in {days} day(s)."
 
 
-def _init_redis():
-    """Initialize Redis client if available"""
-    global redis_client, redis_available
-    
-    if not REDIS_URL:
-        print("⚠️  REDIS_URL not configured - rate limiting disabled for local dev")
+class RateLimiterUnavailable(Exception):
+    """The limiter itself is broken (Redis down). Distinct from a rejection."""
+
+
+# ---------------------------------------------------------------------------
+# The atomic check-and-increment.
+#
+# KEYS[1]              the user's sorted set
+# ARGV[1]              now (float seconds)
+# ARGV[2]              member to add if admitted (unique)
+# ARGV[3]              key TTL in seconds
+# ARGV[4]              widest window in seconds (prune horizon)
+# ARGV[5..]            (label, window_seconds, cap) triples
+#
+# Returns {1, "", 0} on admit, or {0, label, retry_after_seconds} on reject.
+#
+# Redis executes a script atomically, so no other client can observe or mutate
+# the set between the ZCOUNTs and the ZADD.
+# ---------------------------------------------------------------------------
+_CONSUME_LUA = """
+local key    = KEYS[1]
+local now    = tonumber(ARGV[1])
+local member = ARGV[2]
+local ttl    = tonumber(ARGV[3])
+local widest = tonumber(ARGV[4])
+
+-- Prune to the WIDEST window we count over, not the narrowest. Pruning to the
+-- hourly horizon here would make the daily and monthly ZCOUNTs below read an
+-- hour-old set, so those limits could never fire.
+redis.call('ZREMRANGEBYSCORE', key, '-inf', now - widest)
+
+for i = 5, #ARGV, 3 do
+  local label  = ARGV[i]
+  local window = tonumber(ARGV[i + 1])
+  local cap    = tonumber(ARGV[i + 2])
+  local since  = now - window
+  local used   = redis.call('ZCOUNT', key, since, now)
+
+  if used >= cap then
+    -- Quota frees up when the oldest member inside this window ages out of it.
+    local oldest = redis.call('ZRANGEBYSCORE', key, since, now,
+                              'WITHSCORES', 'LIMIT', 0, 1)
+    local retry = 1
+    if oldest[2] then
+      retry = math.ceil(tonumber(oldest[2]) + window - now)
+      if retry < 1 then retry = 1 end
+    end
+    return {0, label, retry}
+  end
+end
+
+redis.call('ZADD', key, now, member)
+redis.call('EXPIRE', key, ttl)
+return {1, '', 0}
+"""
+
+
+def _key(user_id: int) -> str:
+    return f"rate_limit:{user_id}"
+
+
+def _caps() -> dict:
+    return {label: cap for label, _, cap in WINDOWS}
+
+
+def init(client=None) -> None:
+    """Wire up Redis. Raises at startup rather than degrading into a no-op.
+
+    Pass `client` to inject a fake in tests.
+    """
+    global redis_client, _consume_script
+
+    if DISABLED:
+        print("⚠️  RATE_LIMIT_DISABLED=1 — rate limiting is OFF", flush=True)
         return
-    
-    try:
-        import redis.asyncio as redis
-        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-        redis_available = True
-        print("✓ Redis connected for rate limiting")
-    except ImportError:
-        print("⚠️  redis package not installed - rate limiting disabled")
-    except Exception as e:
-        print(f"⚠️  Redis connection failed: {e} - falling back to in-memory")
-        redis_available = False
 
-
-async def _check_redis_health() -> bool:
-    """Check if Redis is still available"""
-    global redis_available
-    if not redis_client:
-        return False
-    try:
-        await redis_client.ping()
-        return True
-    except Exception:
-        redis_available = False
-        print("⚠️  Redis connection lost - falling back to in-memory")
-        return False
-
-
-async def check_rate_limit(user_id: int) -> None:
-    """
-    Check if user has exceeded rate limits.
-    Uses Redis sliding window if available, otherwise in-memory or disabled.
-    """
-    if not REDIS_URL:
-        # Rate limiting disabled for local dev
-        return
-    
-    if redis_available and redis_client:
-        try:
-            await _check_rate_limit_redis(user_id)
-            return
-        except Exception as e:
-            print(f"Redis rate limit check failed: {e}, falling back to in-memory")
-            # Fall through to in-memory
-    
-    # Fallback to in-memory
-    await _check_rate_limit_memory(user_id)
-
-
-async def _check_rate_limit_redis(user_id: int) -> None:
-    """
-    Redis-based sliding window rate limiting.
-    Uses sorted sets (ZSET) with timestamps as scores.
-    """
-    now = time.time()
-    hour_ago = now - 3600
-    day_ago = now - 86400
-    month_ago = now - 2592000  # 30 days
-    
-    key = f"rate_limit:{user_id}"
-    
-    # Remove old entries and count remaining
-    pipe = redis_client.pipeline()
-    
-    # Hourly window
-    pipe.zremrangebyscore(key, 0, hour_ago)
-    pipe.zcount(key, hour_ago, now)
-    
-    # Daily count
-    pipe.zcount(key, day_ago, now)
-    
-    # Monthly count
-    pipe.zcount(key, month_ago, now)
-    
-    results = await pipe.execute()
-    hourly_count = results[1]
-    daily_count = results[2]
-    monthly_count = results[3]
-    
-    # Check limits
-    if hourly_count >= HOURLY_LIMIT:
-        # Calculate time until oldest entry expires
-        oldest = await redis_client.zrange(key, 0, 0, withscores=True)
-        if oldest:
-            oldest_time = oldest[0][1]
-            minutes_remaining = int((oldest_time + 3600 - now) / 60) + 1
-            raise RateLimitExceeded(
-                f"Hourly limit exceeded ({HOURLY_LIMIT} requests/hour). "
-                f"Try again in {minutes_remaining} minute(s)."
+    if client is None:
+        if not REDIS_URL:
+            raise RuntimeError(
+                "REDIS_URL is not set and RATE_LIMIT_DISABLED is not 1. Refusing to "
+                "start without rate limiting — set one or the other explicitly."
             )
-    
-    if daily_count >= DAILY_LIMIT:
-        raise RateLimitExceeded(
-            f"Daily limit exceeded ({DAILY_LIMIT} requests/day). "
-            f"Try again tomorrow."
-        )
-    
-    if monthly_count >= MONTHLY_LIMIT:
-        raise RateLimitExceeded(
-            f"Monthly limit exceeded ({MONTHLY_LIMIT} requests/month). "
-            f"Contact admin to increase your limit."
-        )
+        import redis.asyncio as redis
+
+        client = redis.from_url(REDIS_URL, decode_responses=True)
+
+    redis_client = client
+    _consume_script = client.register_script(_CONSUME_LUA)
+    print(f"✓ Rate limiting active ({', '.join(f'{c}/{l}' for l, _, c in WINDOWS)})", flush=True)
 
 
-async def _check_rate_limit_memory(user_id: int) -> None:
+async def consume(user_id: int) -> str | None:
+    """Atomically check every window and record the request if all have room.
+
+    Call this BEFORE the billable work, not after it succeeds — you are limiting
+    attempts, not successes. Returns a receipt to pass to `refund` if the work
+    fails, or None when limiting is disabled.
+
+    Raises:
+        RateLimitExceeded:      the user is over quota.
+        RateLimiterUnavailable: Redis is unreachable and FAIL_OPEN is not set.
     """
-    In-memory fallback rate limiting.
-    Uses simple list of timestamps.
-    """
+    if DISABLED:
+        return None
+    if _consume_script is None:
+        raise RateLimiterUnavailable("rate limiter not initialised; call init()")
+
     now = time.time()
-    hour_ago = now - 3600
-    day_ago = now - 86400
-    month_ago = now - 2592000
-    
-    timestamps = in_memory_store[user_id]
-    
-    # Clean up old entries
-    timestamps[:] = [ts for ts in timestamps if ts > month_ago]
-    
-    hourly_count = sum(1 for ts in timestamps if ts > hour_ago)
-    daily_count = sum(1 for ts in timestamps if ts > day_ago)
-    monthly_count = len(timestamps)
-    
-    if hourly_count >= HOURLY_LIMIT:
-        oldest_in_hour = min([ts for ts in timestamps if ts > hour_ago])
-        minutes_remaining = int((oldest_in_hour + 3600 - now) / 60) + 1
-        raise RateLimitExceeded(
-            f"Hourly limit exceeded ({HOURLY_LIMIT} requests/hour). "
-            f"Try again in {minutes_remaining} minute(s)."
-        )
-    
-    if daily_count >= DAILY_LIMIT:
-        raise RateLimitExceeded(
-            f"Daily limit exceeded ({DAILY_LIMIT} requests/day). "
-            f"Try again tomorrow."
-        )
-    
-    if monthly_count >= MONTHLY_LIMIT:
-        raise RateLimitExceeded(
-            f"Monthly limit exceeded ({MONTHLY_LIMIT} requests/month). "
-            f"Contact admin to increase your limit."
-        )
+    member = f"{now:.6f}-{uuid.uuid4().hex[:8]}"  # unique: ZADD updates, not appends, on a repeat member
+
+    args = [now, member, KEY_TTL, _WIDEST]
+    for label, window, cap in WINDOWS:
+        args.extend([label, window, cap])
+
+    try:
+        admitted, scope, retry_after = await _consume_script(keys=[_key(user_id)], args=args)
+    except Exception as e:  # connection refused, timeout, NOSCRIPT reload failure...
+        if FAIL_OPEN:
+            print(f"⚠️  Rate limiter unavailable ({e}) — FAIL_OPEN, admitting request", flush=True)
+            return None
+        raise RateLimiterUnavailable(str(e)) from e
+
+    if not int(admitted):
+        scope = scope.decode() if isinstance(scope, bytes) else scope
+        raise RateLimitExceeded(scope, _caps()[scope], int(retry_after))
+
+    return member
 
 
-async def record_request(user_id: int) -> None:
-    """
-    Record a new API request for the user.
-    """
-    if not REDIS_URL:
-        # Rate limiting disabled
+async def refund(user_id: int, receipt: str | None) -> None:
+    """Return quota consumed by work that failed. Best-effort: never raises."""
+    if not receipt or redis_client is None:
         return
-    
-    now = time.time()
-    
-    if redis_available and redis_client:
-        try:
-            key = f"rate_limit:{user_id}"
-            # Add current timestamp to sorted set
-            await redis_client.zadd(key, {str(now): now})
-            # Set expiry to 31 days (slightly more than monthly window)
-            await redis_client.expire(key, 2678400)
-            return
-        except Exception as e:
-            print(f"Redis record failed: {e}, using in-memory")
-            # Fall through to in-memory
-    
-    # Fallback to in-memory
-    in_memory_store[user_id].append(now)
+    try:
+        await redis_client.zrem(_key(user_id), receipt)
+    except Exception as e:
+        print(f"⚠️  Rate limit refund failed for {user_id}: {e}", flush=True)
 
 
 async def get_user_stats(user_id: int) -> dict:
-    """
-    Get current usage statistics for a user.
-    """
-    if not REDIS_URL:
+    """Current usage per window. Read-only — never prunes."""
+    if DISABLED:
         return {
-            "hourly": {"used": 0, "limit": HOURLY_LIMIT},
-            "daily": {"used": 0, "limit": DAILY_LIMIT},
-            "monthly": {"used": 0, "limit": MONTHLY_LIMIT},
-            "note": "Rate limiting disabled (no REDIS_URL configured)"
-        }
-    
+            label: {"used": 0, "limit": cap} for label, _, cap in WINDOWS
+        } | {"note": "Rate limiting disabled (RATE_LIMIT_DISABLED=1)"}
+
+    if redis_client is None:
+        raise RateLimiterUnavailable("rate limiter not initialised; call init()")
+
     now = time.time()
-    hour_ago = now - 3600
-    day_ago = now - 86400
-    month_ago = now - 2592000
-    
-    if redis_available and redis_client:
-        try:
-            key = f"rate_limit:{user_id}"
-            hourly_count = await redis_client.zcount(key, hour_ago, now)
-            daily_count = await redis_client.zcount(key, day_ago, now)
-            monthly_count = await redis_client.zcount(key, month_ago, now)
-            
-            return {
-                "hourly": {"used": hourly_count, "limit": HOURLY_LIMIT},
-                "daily": {"used": daily_count, "limit": DAILY_LIMIT},
-                "monthly": {"used": monthly_count, "limit": MONTHLY_LIMIT}
-            }
-        except Exception:
-            # Fall through to in-memory
-            pass
-    
-    # Fallback to in-memory
-    timestamps = in_memory_store.get(user_id, [])
-    timestamps = [ts for ts in timestamps if ts > month_ago]
-    
-    hourly_count = sum(1 for ts in timestamps if ts > hour_ago)
-    daily_count = sum(1 for ts in timestamps if ts > day_ago)
-    monthly_count = len(timestamps)
-    
+    key = _key(user_id)
+    try:
+        pipe = redis_client.pipeline()
+        for _, window, _cap in WINDOWS:
+            pipe.zcount(key, now - window, now)
+        counts = await pipe.execute()
+    except Exception as e:
+        raise RateLimiterUnavailable(str(e)) from e
+
     return {
-        "hourly": {"used": hourly_count, "limit": HOURLY_LIMIT},
-        "daily": {"used": daily_count, "limit": DAILY_LIMIT},
-        "monthly": {"used": monthly_count, "limit": MONTHLY_LIMIT},
-        "note": "Using in-memory fallback"
+        label: {"used": int(used), "limit": cap}
+        for (label, _, cap), used in zip(WINDOWS, counts)
     }
 
 
-async def reset_user_limits(user_id: int) -> None:
-    """
-    Admin function: reset all rate limits for a user.
-    """
-    if redis_available and redis_client:
-        key = f"rate_limit:{user_id}"
-        await redis_client.delete(key)
-    
-    # Also clear in-memory
-    if user_id in in_memory_store:
-        del in_memory_store[user_id]
+async def close_connections() -> bool:
+    """Release the Redis pool on shutdown. Best-effort: never blocks the exit.
 
-
-async def create_indexes() -> None:
+    Returns True if a live pool was actually closed, False when there was
+    nothing to close (e.g. RATE_LIMIT_DISABLED=1 — init() never opened one).
     """
-    Initialize rate limiting system.
-    """
-    _init_redis()
-    
-    if redis_available and redis_client:
-        # Test connection
-        await _check_redis_health()
-
-
-async def close_connections() -> None:
-    """
-    Close Redis connections on shutdown.
-    """
-    if redis_client:
-        await redis_client.close()
+    if redis_client is None:
+        return False
+    await redis_client.aclose()
+    return True

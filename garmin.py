@@ -1,15 +1,51 @@
 import garth
+from garth.exc import GarthHTTPError
 from garth.http import Client as GarthClient
+from requests import HTTPError
 import time
 import os
 from workout_ai import plan_to_json, plan_to_json_async
 from garmin_convert import convert
 import asyncio
 
-# Global lock to serialize the LLM plan->JSON call (the only token-costing,
-# billable step). Concurrent users can't spike token spend past one in-flight
-# request at a time; per-user quotas live in rate_limiter.py.
-_llm_lock = asyncio.Lock()
+# Bound how many LLM calls are in flight at once. This is a *concurrency* bound,
+# not a spend bound — spend is bounded per-user in rate_limiter.py, which is the
+# only place that can actually count requests. A previous version used a single
+# global asyncio.Lock and called it cost control; it wasn't (a user can serialize
+# a thousand requests through a mutex), and with no timeout on the provider call
+# one hung request stalled every user behind it for the SDK's 600s default.
+#
+# The two bounds are orthogonal: the limiter is per-user and cannot see a spike of
+# N distinct users each firing their first, fully-in-quota request at once. That
+# spike is what the semaphore is for — it keeps us under the provider's org-wide
+# RPM/TPM ceiling.
+#
+# Bound the *wait* as well as the concurrency. An unbounded queue turns a provider
+# slowdown into a silent pile-up: at concurrency 4 and a 45s timeout, the 500th
+# queued request waits ~90 minutes before its own timeout clock even starts, long
+# after Telegram (and the user) gave up. Failing fast with "busy" is worse latency
+# on paper and much better behaviour in practice.
+#
+# This bound is cross-user only. Keeping a single user to one workout at a time is
+# the bot's job, not this module's — bot.py holds a per-user single-flight gate
+# across the whole parse+upload flow and ignores further messages while one is in
+# progress, so a per-user bound here would be redundant.
+LLM_CONCURRENCY = int(os.getenv("LLM_CONCURRENCY", "4"))
+LLM_TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "45"))
+LLM_QUEUE_WAIT_S = float(os.getenv("LLM_QUEUE_WAIT_S", "10"))
+_llm_sem = asyncio.Semaphore(LLM_CONCURRENCY)
+
+
+class LLMBusy(Exception):
+    """Every LLM slot was occupied and none freed up within LLM_QUEUE_WAIT_S.
+
+    Deliberately NOT a TimeoutError subclass: no provider call was made, so callers
+    must not report this as "parsing timed out" or bill it as a spent attempt.
+    """
+
+
+class GarminAuthExpired(Exception):
+    """Garmin rejected the OAuth token (401). Refreshable without an SSO hit."""
 
 
 # --- Login method: "garth" (default) or "curl" ---
@@ -138,8 +174,7 @@ def _install_garth_proxy(client: GarthClient) -> None:
             parts = urlsplit(request.url)
             if parts.netloc == "connectapi.garmin.com":
                 request.headers["X-Garmin-Host"] = parts.netloc
-                if secret:
-                    request.headers["X-Proxy-Auth"] = secret
+                request.headers["X-Proxy-Auth"] = secret  # non-empty; garmin_oauth asserts it
                 # Drop the stale Host so urllib3 derives it from the worker URL.
                 request.headers.pop("Host", None)
                 request.url = base + parts.path + (
@@ -168,36 +203,89 @@ def upload_workout_to_garmin(token: str, workout_plan: str) -> str:
     garmin_json = convert(workout_json)
     return upload_garmin_payload(token, garmin_json)
 
+
+def _http_status(e: Exception) -> int | None:
+    """The HTTP status behind an exception, or None if it isn't an HTTP error.
+
+    Takes `Exception` because callers hand it whatever `connectapi` raised — a
+    connection reset is a legitimate input, answered with None, not a type error.
+
+    garth does not raise requests.HTTPError directly: it wraps it in a
+    GarthHTTPError dataclass whose `.error` holds the original, so the status lives
+    one level down. Reading `.response` off the outer exception always yields None,
+    which silently turned the 401 check below — and the token refresh it gates —
+    into dead code.
+    """
+    inner = e.error if isinstance(e, GarthHTTPError) else e
+    if isinstance(inner, HTTPError) and inner.response is not None:
+        return inner.response.status_code
+    return None
+
+
+def _raise_if_auth_expired(e: Exception) -> None:
+    """Translate a Garmin 401 into a typed auth failure.
+
+    Matching on `"401" in str(e)` (the old approach) also fires on any error whose
+    body happens to contain "401" — e.g. a Garmin 500 echoing a workout named
+    "401 repeats" — sending a healthy token down the refresh path.
+    """
+    if _http_status(e) == 401:
+        raise GarminAuthExpired(str(e)) from e
+
+
 def upload_garmin_payload(token: str, garmin_json: dict) -> str:
     client = _client_for(token)
-    result = client.connectapi("/workout-service/workout", method="POST", json=garmin_json)
+    try:
+        result = client.connectapi("/workout-service/workout", method="POST", json=garmin_json)
+    except Exception as e:
+        _raise_if_auth_expired(e)
+        raise
     return result["workoutId"]
+
+
+async def parse_plan(workout_plan: str) -> dict:
+    """Turn free text into a validated workout dict. The only billable step.
+
+    Two bounds. LLM_QUEUE_WAIT_S caps how long we queue for a global slot; then
+    LLM_TIMEOUT_S covers the provider call, its clock starting only once the slot
+    is held — a request must never burn its provider budget queueing.
+
+    Raises:
+        LLMBusy:               every global slot was busy. Nothing was billed.
+        asyncio.TimeoutError:  the provider call itself exceeded LLM_TIMEOUT_S.
+    """
+    try:
+        async with asyncio.timeout(LLM_QUEUE_WAIT_S):
+            await _llm_sem.acquire()
+    except TimeoutError as e:
+        raise LLMBusy(f"no LLM slot within {LLM_QUEUE_WAIT_S}s") from e
+
+    try:
+        return await asyncio.wait_for(
+            plan_to_json_async(workout_plan), timeout=LLM_TIMEOUT_S
+        )
+    finally:
+        _llm_sem.release()
+
+
+async def upload_parsed_workout(token: str, workout_json: dict) -> str:
+    """Upload an already-parsed workout. Safe to retry — costs no LLM tokens.
+
+    Raises:
+        GarminAuthExpired: the token is stale; refresh and call again.
+    """
+    garmin_json = convert(workout_json)
+    return await asyncio.to_thread(upload_garmin_payload, token, garmin_json)
 
 
 async def upload_workout_to_garmin_async(
     token: str,
     workout_plan: str,
 ) -> tuple[str, dict, float]:
-    """
-    Upload workout to Garmin asynchronously.
-
-    Returns:
-        Tuple of (workout_id, workout_json, processing_time_ms)
+    """Parse + upload in one shot. Kept for the CLI; the bot calls the two halves
+    separately so a token refresh can retry the upload without re-billing the LLM.
     """
     start_time = time.time()
-
-    # Serialize the billable LLM call so concurrent users can't spike spend.
-    async with _llm_lock:
-        workout_json = await plan_to_json_async(workout_plan)
-    garmin_json = convert(workout_json)
-
-    def _upload():
-        client = _client_for(token)
-        res = client.connectapi("/workout-service/workout", method="POST", json=garmin_json)
-        return res["workoutId"]
-
-    workout_id = await asyncio.to_thread(_upload)
-
-    processing_time = (time.time() - start_time) * 1000  # Convert to ms
-
-    return workout_id, workout_json, processing_time
+    workout_json = await parse_plan(workout_plan)
+    workout_id = await upload_parsed_workout(token, workout_json)
+    return workout_id, workout_json, (time.time() - start_time) * 1000

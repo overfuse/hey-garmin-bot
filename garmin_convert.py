@@ -76,6 +76,18 @@ def exec_step(step_order: int, meta_key: str, *,
               pace: Optional[str] = None,
               rest: Optional[int] = None,
               child: bool = False) -> Dict[str, Any]:
+    """Build one executable step.
+
+    Target and end condition are derived from the data present, not from the step
+    *type*. Deriving them from the type is how warmup/cooldown distance and pace
+    used to be silently discarded: the model extracted "2 км разминка" correctly,
+    the eval suite scored it as a pass, and the watch received "warm up until you
+    press the lap button". Any step with a distance ends on distance; any step
+    with a pace carries a pace target.
+    """
+    if meta_key not in STEP_META:
+        raise ValueError(f"Unknown meta_key {meta_key}")
+
     dto: Dict[str, Any] = {
         "type": "ExecutableStepDTO",
         "stepOrder": step_order,
@@ -84,8 +96,8 @@ def exec_step(step_order: int, meta_key: str, *,
     if child:
         dto["childStepId"] = 1
 
-    # Target setup
-    if meta_key == "interval":
+    # Target: a pace, wherever it appears — including on a warmup or cooldown.
+    if pace is not None:
         fast_mps, slow_mps = pace_window_mps(pace)
         dto["targetType"] = TARGET_PACE
         dto["targetValueOne"] = fast_mps   # high (fast)
@@ -93,31 +105,36 @@ def exec_step(step_order: int, meta_key: str, *,
     else:
         dto["targetType"] = TARGET_NO
 
-    # End conditions
-    if meta_key in ("warmup", "cooldown"):
-        dto.update({
-            "endCondition": END_LAP,
-            "endConditionValue": 0.0,
-            "preferredEndConditionUnit": None
-        })
-    elif meta_key in ("interval", "recovery"):
-        dto.update({
-            "endCondition": END_DISTANCE,
-            "endConditionValue": float(distance),
-            "preferredEndConditionUnit": UNIT_METER,
-            "durationType": {"workoutStepDurationTypeKey": "distance"},
-            "durationValue": distance
-        })
-    elif meta_key == "rest":
+    # End condition, in order of specificity: time > distance > lap button.
+    if meta_key == "rest":
+        if rest is None:
+            raise ValueError("rest step requires a duration in seconds")
         dto.update({
             "endCondition": END_TIME,
             "endConditionValue": float(rest),
             "preferredEndConditionUnit": None,
             "durationType": {"workoutStepDurationTypeKey": "time"},
-            "durationValue": rest
+            "durationValue": rest,
+        })
+    elif distance is not None:
+        dto.update({
+            "endCondition": END_DISTANCE,
+            "endConditionValue": float(distance),
+            "preferredEndConditionUnit": UNIT_METER,
+            "durationType": {"workoutStepDurationTypeKey": "distance"},
+            "durationValue": distance,
+        })
+    elif meta_key in ("warmup", "cooldown"):
+        # Only a distance-less warmup/cooldown falls back to the lap button, which
+        # is what SYSTEM_PROMPT.md promises ("still include the section without
+        # distance — transition occurs by pressing the Lap button").
+        dto.update({
+            "endCondition": END_LAP,
+            "endConditionValue": 0.0,
+            "preferredEndConditionUnit": None,
         })
     else:
-        raise ValueError(f"Unknown meta_key {meta_key}")
+        raise ValueError(f"{meta_key} step requires a distance")
 
     return dto
 
@@ -147,7 +164,7 @@ def convert(interval_json: Dict[str, Any]) -> Dict[str, Any]:
 
     # Warm‑up
     if "warmup" in interval_json:
-        wu = interval_json["warmup"]
+        wu = interval_json["warmup"] or {}
         order += 1
         steps.append(exec_step(order, "warmup", distance=wu.get("distance"), pace=wu.get("pace")))
 
@@ -179,7 +196,7 @@ def convert(interval_json: Dict[str, Any]) -> Dict[str, Any]:
 
     # Cool‑down
     if "cooldown" in interval_json:
-        cd = interval_json["cooldown"]
+        cd = interval_json["cooldown"] or {}
         order += 1
         steps.append(exec_step(order, "cooldown", distance=cd.get("distance"), pace=cd.get("pace")))
 

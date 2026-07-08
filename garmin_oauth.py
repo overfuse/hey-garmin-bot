@@ -58,7 +58,7 @@ TICKET_RE = re.compile(r"embed\?ticket=(ST-[A-Za-z0-9._\-]+)")
 # TLS impersonation doesn't help because the throttle is IP-based. Route those
 # requests through a Cloudflare Worker (CF's IP pool isn't on the blocklist).
 #   GARMIN_OAUTH_PROXY=https://<worker>.workers.dev
-#   GARMIN_OAUTH_PROXY_SECRET=<shared secret>   # optional, see worker code
+#   GARMIN_OAUTH_PROXY_SECRET=<shared secret>   # REQUIRED when the proxy is set
 # The OAuth1 signature is computed over the canonical Garmin URL; we only swap
 # the wire host (path+query stay byte-identical) and tell the Worker the real
 # host via X-Garmin-Host, so Garmin still validates the signature.
@@ -66,6 +66,15 @@ TICKET_RE = re.compile(r"embed\?ticket=(ST-[A-Za-z0-9._\-]+)")
 # exchange calls go through the proxy. Unset the env var to run direct.
 _OAUTH_PROXY_BASE = (os.getenv("GARMIN_OAUTH_PROXY") or "").rstrip("/") or None
 _OAUTH_PROXY_SECRET = os.getenv("GARMIN_OAUTH_PROXY_SECRET", "")
+
+# Every user's Garmin OAuth token transits the Worker. Routing that through an
+# unauthenticated endpoint is not a degraded mode worth supporting, so a proxy
+# without a secret is a startup error rather than a silent downgrade.
+if _OAUTH_PROXY_BASE and not _OAUTH_PROXY_SECRET:
+    raise RuntimeError(
+        "GARMIN_OAUTH_PROXY is set but GARMIN_OAUTH_PROXY_SECRET is empty. "
+        "The proxy would accept unauthenticated requests — refusing to start."
+    )
 
 
 def _proxied_url(url: str) -> str:
@@ -81,10 +90,11 @@ def _proxy_headers(url: str, headers: dict) -> dict:
     """Add X-Garmin-Host (the real host) + shared secret, when enabled."""
     if not _OAUTH_PROXY_BASE:
         return headers
-    out = {**headers, "X-Garmin-Host": urlsplit(url).netloc}
-    if _OAUTH_PROXY_SECRET:
-        out["X-Proxy-Auth"] = _OAUTH_PROXY_SECRET
-    return out
+    return {
+        **headers,
+        "X-Garmin-Host": urlsplit(url).netloc,
+        "X-Proxy-Auth": _OAUTH_PROXY_SECRET,  # guaranteed non-empty, see module init
+    }
 
 
 def _get_oauth_consumer() -> dict:

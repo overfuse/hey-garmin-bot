@@ -19,6 +19,16 @@ from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
 from workout_ai.models import Workout
+from workout_ai.providers import claude as _claude_provider
+from workout_ai.providers import openai as _openai_provider
+
+# Import the production caps rather than restating them. These runners already
+# drifted once — production capped chat completions at 1200 tokens while the eval
+# used 2000, so truncation between the two was a live bug the harness could not
+# see. Anything the eval hardcodes is something the eval stops measuring.
+CHAT_MAX_TOKENS = _openai_provider.MAX_TOKENS
+ANTHROPIC_MAX_TOKENS = _claude_provider.MAX_TOKENS
+ANTHROPIC_THINKING_BUDGET = _claude_provider.THINKING_BUDGET
 
 Runner = Callable[[str, str, str], Awaitable[dict]]
 
@@ -42,7 +52,7 @@ async def run_openai_chat(system_prompt: str, description: str, model: str) -> d
     completion = await client.chat.completions.parse(
         model=model,
         messages=_messages(system_prompt, description),
-        max_tokens=2000,
+        max_tokens=CHAT_MAX_TOKENS,
         seed=42,
         temperature=0,
         response_format=Workout,
@@ -66,8 +76,8 @@ async def run_anthropic(system_prompt: str, description: str, model: str) -> dic
     client = AsyncAnthropic()
     message = await client.messages.parse(
         model=model,
-        max_tokens=8000,
-        thinking={"type": "enabled", "budget_tokens": 2000},
+        max_tokens=ANTHROPIC_MAX_TOKENS,
+        thinking={"type": "enabled", "budget_tokens": ANTHROPIC_THINKING_BUDGET},
         system=system_prompt,
         messages=[{"role": "user", "content": description}],
         output_format=Workout,

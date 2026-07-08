@@ -15,10 +15,11 @@ DEFAULT_MODEL = "claude-haiku-4-5"
 # used, not the cap, so the headroom is free insurance.
 THINKING_BUDGET = 2000
 MAX_TOKENS = 8000
+TIMEOUT_S = float(os.environ.get("LLM_TIMEOUT_S", "45"))
 
 
 async def plan(system_prompt: str, description: str, model: str) -> Workout:
-    client = AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    client = AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"), timeout=TIMEOUT_S)
     message = await client.messages.parse(
         model=model,
         max_tokens=MAX_TOKENS,
