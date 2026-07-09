@@ -7,11 +7,12 @@ requires-python = ">=3.13"
 # Direct imports only — transitive pins live in uv.lock. garth and pyrogram are
 # pinned exactly: both are scraping-adjacent and behavior-sensitive to upgrades.
 dependencies = [
+    "aiohttp>=3.14.1",
     "anthropic>=0.112.0",
     "cachetools>=6.1.0",
     "cryptography>=49.0.0",
     "curl-cffi>=0.7.0",
-    "dnspython>=2.7.0",       # mongodb+srv:// URI support
+    "dnspython>=2.7.0", # mongodb+srv:// URI support
     "garth==0.5.17",
     "motor>=3.7.1",
     "oauthlib>=3.3.1",

@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Awaitable, Callable
 
+import prefs
 from audit import log_auth_event
 from garmin import GarminAuthExpired, refresh_token_async, upload_parsed_workout
 from rate_limiter import RateLimiterUnavailable, RateLimitExceeded, consume, refund
@@ -127,6 +128,12 @@ async def process_workout(
             user_id=user_id, prompt=plan_text, error=f"{type(e).__name__}: {e}"
         )
         return Failure(FailureCode.PARSE_FAILED)
+
+    # Enforce the user's structure preferences on the parsed workout. Done
+    # here — after the LLM, before upload and logging — so the logged
+    # workout_json is exactly what went to Garmin. Pure dict surgery, cannot
+    # fail, costs nothing when the prefs change nothing.
+    workout_json = prefs.apply(workout_json, prefs.resolve(user_data.get("prefs")))
 
     try:
         token = await get_garmin_token(user_data)

@@ -30,6 +30,18 @@ async def delete_user(uid: int):
     await users_col.delete_one({"telegram_id": uid})
 
 
+async def set_prefs(uid: int, prefs: dict) -> None:
+    """Store the user's workout preferences (a full resolved dict, see prefs.py).
+
+    $set instead of save_user's replace_one: prefs can be saved before /start
+    ever ran (the settings Mini App works pre-login), and a replace here would
+    wipe login state the same way /start must not wipe prefs.
+    """
+    await users_col.update_one(
+        {"telegram_id": uid}, {"$set": {"prefs": prefs}}, upsert=True
+    )
+
+
 def has_garmin_auth(user_data: dict) -> bool:
     return bool(user_data.get("garmin_auth_enc") or user_data.get("garmin_auth"))
 

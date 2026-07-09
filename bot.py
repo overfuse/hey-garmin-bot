@@ -10,8 +10,13 @@ import os
 import traceback
 
 from dotenv import load_dotenv
-from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram import Client, filters, raw
+from pyrogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    WebAppInfo,
+)
 
 import session
 import token_crypto
@@ -36,6 +41,7 @@ from user import (
     has_garmin_auth,
     save_user,
 )
+from webapp_server import start_webapp
 from workout_log import create_indexes as create_workout_indexes
 from workout_service import FailureCode, Success, process_workout
 
@@ -44,6 +50,10 @@ load_dotenv()
 API_ID = int(os.getenv("TELEGRAM_API_ID", 0))
 API_HASH = os.getenv("TELEGRAM_API_HASH", "")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+# Public HTTPS URL of the settings Mini App (webapp_server.py behind the
+# deploy's TLS). Unset means the /settings button can't be offered — Telegram
+# refuses non-HTTPS web_app URLs — so the command degrades to an explanation.
+WEBAPP_URL = os.getenv("WEBAPP_URL", "")
 
 # States
 AWAIT_USERNAME = "await_username"
@@ -103,8 +113,12 @@ async def start_handler(client: Client, message: Message):
             "Use /logout first if you want to switch accounts."
         )
 
-    # Initialize persistent state
-    await save_user(user_id, {"state": AWAIT_USERNAME})
+    # Initialize persistent state. save_user replaces the whole document, so
+    # carry the settings over — re-logging-in must not silently reset them.
+    new_data = {"state": AWAIT_USERNAME}
+    if user_data and user_data.get("prefs"):
+        new_data["prefs"] = user_data["prefs"]
+    await save_user(user_id, new_data)
     # Drop any stale half-finished login handshake
     await session.clear(user_id)
     await message.reply("Welcome! To get started, please enter your Garmin Connect username.")
@@ -129,6 +143,24 @@ async def logout_handler(client: Client, message: Message):
         )
     else:
         await message.reply("You are not logged in. Use /start to log in.")
+
+# /settings command: open the preferences Mini App
+@app.on_message(filters.command("settings") & filters.private)
+async def settings_handler(client: Client, message: Message):
+    if not WEBAPP_URL:
+        return await message.reply(
+            "Settings are not available on this deployment yet."
+        )
+    await message.reply(
+        "Configure how your workouts are structured — warmup, cooldown, "
+        "and how they end:",
+        reply_markup=InlineKeyboardMarkup(
+            # Must be an INLINE button: a reply-keyboard web_app button opens
+            # the page with empty initData and the API couldn't authenticate.
+            [[InlineKeyboardButton("⚙️ Workout settings", web_app=WebAppInfo(url=WEBAPP_URL))]]
+        ),
+    )
+
 
 # /stats command: show current rate limit usage
 @app.on_message(filters.command("stats") & filters.private)
@@ -271,8 +303,12 @@ async def text_handler(client: Client, message: Message):
         return await message.reply("pong")
 
     handler = _STATE_HANDLERS.get(user_data.get("state"))
-    if handler is not None:
-        await handler(message, user_id, user_data)
+    if handler is None:
+        # A document with no login state exists when the user saved settings
+        # in the Mini App before ever logging in — point them at /start
+        # instead of ignoring them.
+        return await message.reply("Please use /start to log in first.")
+    await handler(message, user_id, user_data)
 
 
 async def startup():
@@ -302,15 +338,33 @@ if __name__ == "__main__":
 
     async def main():
         await startup()
+        webapp_runner = await start_webapp()
         print("Starting Pyrogram...")
         await app.start()
         print(f"Bot started as @{app.me.username}")
+        if WEBAPP_URL:
+            # Make settings permanently reachable: the bot's default menu
+            # button (☰ next to the message box in every private chat) opens
+            # the Mini App. Menu-button launches carry full initData, same as
+            # the /settings inline button. Raw API on purpose — pyrogram's
+            # set_chat_menu_button(chat_id=None) resolves the peer "me"
+            # instead of sending InputUserEmpty, so it never sets the DEFAULT
+            # button. Re-run on every boot: it's idempotent and picks up a
+            # changed WEBAPP_URL (e.g. a fresh dev tunnel) automatically.
+            await app.invoke(
+                raw.functions.bots.SetBotMenuButton(
+                    user_id=raw.types.InputUserEmpty(),
+                    button=raw.types.BotMenuButton(text="Settings", url=WEBAPP_URL),
+                )
+            )
+            print("✓ Default menu button → settings Mini App")
         # finally, not a trailing statement: idle() returns on SIGTERM, which is how
         # Railway stops us. An exception escaping it must not skip the teardown.
         try:
             await idle()
         finally:
             await app.stop()
+            await webapp_runner.cleanup()
             await shutdown()
 
     # Must use app.run() — it reuses the event loop that Pyrogram's

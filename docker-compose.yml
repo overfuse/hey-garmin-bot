@@ -37,4 +37,8 @@ services:
       GARMIN_LOGIN_METHOD: "curl"
       MONGODB_URI: "mongodb://mongo:27017"
       REDIS_URL: "redis://redis:6379/0"
+    ports:
+      # Settings Mini App (webapp_server.py). Telegram needs public HTTPS in
+      # front of this — set WEBAPP_URL in .env to that public URL.
+      - "8080:8080"
     command: ["python", "bot.py"]

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Workout settings</title>
+<style>
+  /* Theme comes entirely from Telegram's CSS variables so the page follows
+     the client's light/dark palette; the second value is the fallback for
+     opening the page in a plain browser while debugging. */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--tg-theme-secondary-bg-color, #f0f0f0);
+    color: var(--tg-theme-text-color, #000);
+    font-size: 16px;
+  }
+  main { padding: 16px 16px 96px; max-width: 480px; margin: 0 auto; }
+  h1 {
+    font-size: 13px; font-weight: 500; text-transform: uppercase;
+    letter-spacing: .4px; color: var(--tg-theme-hint-color, #8e8e93);
+    margin: 8px 4px 8px;
+  }
+  .card {
+    background: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, #fff));
+    border-radius: 12px; overflow: hidden;
+  }
+  .row {
+    display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .row + .row { border-top: .5px solid var(--tg-theme-secondary-bg-color, #f0f0f0); }
+  .row .text { flex: 1; }
+  .row .label { display: block; }
+  .row .hint {
+    display: block; font-size: 13px; margin-top: 2px;
+    color: var(--tg-theme-hint-color, #8e8e93);
+  }
+  /* iOS-style switch on a plain checkbox */
+  .row input[type="checkbox"] {
+    appearance: none; -webkit-appearance: none; flex: none;
+    width: 51px; height: 31px; border-radius: 16px;
+    background: var(--tg-theme-hint-color, #ccc);
+    position: relative; transition: background .15s; cursor: pointer;
+  }
+  .row input[type="checkbox"]:checked {
+    background: var(--tg-theme-button-color, #2481cc);
+  }
+  .row input[type="checkbox"]::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 27px; height: 27px; border-radius: 50%;
+    background: #fff; transition: left .15s;
+    box-shadow: 0 1px 3px rgba(0,0,0,.25);
+  }
+  .row input[type="checkbox"]:checked::after { left: 22px; }
+  #status {
+    margin: 12px 4px 0; font-size: 14px;
+    color: var(--tg-theme-hint-color, #8e8e93);
+  }
+  #status.error { color: var(--tg-theme-destructive-text-color, #d33); }
+  body.loading .card { opacity: .45; pointer-events: none; }
+</style>
+</head>
+<body class="loading">
+<main>
+  <h1>Workout structure</h1>
+  <div class="card">
+    <label class="row">
+      <span class="text">
+        <span class="label">Always include warmup</span>
+        <span class="hint">Add a warmup even when the plan doesn't mention one</span>
+      </span>
+      <input type="checkbox" id="add_warmup">
+    </label>
+    <label class="row">
+      <span class="text">
+        <span class="label">Always include cooldown</span>
+        <span class="hint">Add a cooldown even when the plan doesn't mention one</span>
+      </span>
+      <input type="checkbox" id="add_cooldown">
+    </label>
+    <label class="row">
+      <span class="text">
+        <span class="label">End warmup/cooldown on lap press</span>
+        <span class="hint">Skip their distance — finish by pressing the lap button on the watch</span>
+      </span>
+      <input type="checkbox" id="wu_cd_lap_press">
+    </label>
+    <label class="row">
+      <span class="text">
+        <span class="label">No pace for warmup/cooldown</span>
+        <span class="hint">Skip pace targets on warmup and cooldown</span>
+      </span>
+      <input type="checkbox" id="wu_cd_skip_pace">
+    </label>
+  </div>
+  <p id="status">Loading…</p>
+</main>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
