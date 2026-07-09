@@ -1,7 +1,8 @@
 import os
 
-from anthropic import AsyncAnthropic
+from anthropic import AnthropicError, AsyncAnthropic
 
+from ..errors import WorkoutAIConfigError
 from ..models import Workout
 
 NAME = "claude"
@@ -19,7 +20,16 @@ TIMEOUT_S = float(os.environ.get("LLM_TIMEOUT_S", "45"))
 
 
 async def plan(system_prompt: str, description: str, model: str) -> Workout:
-    client = AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"), timeout=TIMEOUT_S)
+    # A missing key must surface as our misconfiguration BEFORE any request is
+    # issued, so the caller can refund the quota unit. The SDK only raises a
+    # TypeError at request-build time, so check explicitly instead.
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise WorkoutAIConfigError("ANTHROPIC_API_KEY is not set")
+    try:
+        client = AsyncAnthropic(api_key=api_key, timeout=TIMEOUT_S)
+    except AnthropicError as e:
+        raise WorkoutAIConfigError(f"Anthropic client init failed: {e}") from e
     message = await client.messages.parse(
         model=model,
         max_tokens=MAX_TOKENS,

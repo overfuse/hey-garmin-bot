@@ -81,6 +81,14 @@ REDIS_URL=redis://redis:6379/0
 RATE_LIMIT_HOURLY=10
 RATE_LIMIT_DAILY=50
 RATE_LIMIT_MONTHLY=200
+
+# Token encryption at rest (required — or set TOKEN_ENC_DISABLED=1 explicitly for local dev)
+# Generate: python -c "import os,base64; print(base64.b64encode(os.urandom(32)).decode())"
+TOKEN_ENC_KEY=<base64 32-byte key>
+
+# Log retention (optional, defaults shown)
+WORKOUT_LOG_RETENTION_DAYS=90
+AUTH_EVENTS_RETENTION_DAYS=365
 ```
 
 ### Run with Docker Compose

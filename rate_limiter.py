@@ -135,8 +135,13 @@ def _caps() -> dict:
     return {label: cap for label, _, cap in WINDOWS}
 
 
-def init(client=None) -> None:
-    """Wire up Redis. Raises at startup rather than degrading into a no-op.
+async def init(client=None) -> None:
+    """Wire up Redis and verify it answers. Raises at startup, not on first use.
+
+    redis.from_url is lazy and register_script is local object construction —
+    neither touches the network. Without the ping a typo'd REDIS_URL sails
+    through startup and, because this module is fail-closed, converts into a
+    total outage on the first workout instead of a crashed deploy.
 
     Pass `client` to inject a fake in tests.
     """
@@ -155,6 +160,9 @@ def init(client=None) -> None:
         import redis.asyncio as redis
 
         client = redis.from_url(REDIS_URL, decode_responses=True)
+
+    # Prove the connection before publishing any state or claiming success.
+    await client.ping()
 
     redis_client = client
     _consume_script = client.register_script(_CONSUME_LUA)

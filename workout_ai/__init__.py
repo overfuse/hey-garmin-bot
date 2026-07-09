@@ -4,6 +4,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .errors import WorkoutAIConfigError
 from .providers import REGISTRY
 
 load_dotenv()
@@ -19,7 +20,7 @@ MODEL = os.environ.get("WORKOUT_AI_MODEL")
 # is resolved relative to this package, so it loads regardless of the CWD.
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "SYSTEM_PROMPT.md"
 
-__all__ = ["plan_to_json", "plan_to_json_async"]
+__all__ = ["plan_to_json", "plan_to_json_async", "WorkoutAIConfigError"]
 
 
 def plan_to_json(description: str) -> dict:
@@ -29,7 +30,7 @@ def plan_to_json(description: str) -> dict:
 async def plan_to_json_async(description: str) -> dict:
     provider = REGISTRY.get(PROVIDER)
     if provider is None:
-        raise ValueError(
+        raise WorkoutAIConfigError(
             f"Unknown WORKOUT_AI_PROVIDER={PROVIDER!r}; expected one of {sorted(REGISTRY)}"
         )
 

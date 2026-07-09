@@ -1,7 +1,8 @@
 import os
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAIError
 
+from ..errors import WorkoutAIConfigError
 from ..models import Workout
 
 NAME = "openai"
@@ -18,7 +19,12 @@ MAX_TOKENS = 2000  # must match evals/models.py — truncation is a production b
 
 
 async def plan(system_prompt: str, description: str, model: str) -> Workout:
-    client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"), timeout=TIMEOUT_S)
+    # Construction raises on a missing key — before any request is issued, which
+    # is what lets the caller refund the quota unit for our misconfiguration.
+    try:
+        client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"), timeout=TIMEOUT_S)
+    except OpenAIError as e:
+        raise WorkoutAIConfigError(f"OpenAI client init failed: {e}") from e
     completion = await client.chat.completions.parse(
         model=model,
         messages=[

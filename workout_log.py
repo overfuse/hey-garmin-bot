@@ -1,12 +1,16 @@
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 import motor.motor_asyncio
+from pymongo.errors import OperationFailure
 
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
 mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI)
 db = mongo_client["hey_garmin"]
 workout_logs_col = db["workout_logs"]
+
+# Raw prompts are user data, not an audit trail — they must not accrue forever.
+RETENTION_DAYS = int(os.getenv("WORKOUT_LOG_RETENTION_DAYS", "90"))
 
 
 async def log_workout_request(
@@ -26,7 +30,9 @@ async def log_workout_request(
     log_entry = {
         "user_id": user_id,
         "prompt": prompt,
-        "timestamp": datetime.utcnow(),
+        # tz-aware: utcnow() is deprecated and naive, and the TTL index below
+        # keys off a real BSON date.
+        "timestamp": datetime.now(timezone.utc),
         "success": error is None,
         "workout_json": workout_json,
         "garmin_workout_id": garmin_workout_id,
@@ -91,5 +97,15 @@ async def create_indexes() -> None:
     """
     # Index on user_id and timestamp for efficient user history queries
     await workout_logs_col.create_index([("user_id", 1), ("timestamp", -1)])
-    # Index on timestamp for general time-based queries
-    await workout_logs_col.create_index("timestamp")
+    # Timestamp index doubles as the retention policy. A plain {timestamp: 1}
+    # index (or one with a different TTL) already deployed raises
+    # IndexOptionsConflict (85) — same key pattern, different options — so drop
+    # and recreate rather than crash the deploy.
+    ttl = RETENTION_DAYS * 86400
+    try:
+        await workout_logs_col.create_index("timestamp", expireAfterSeconds=ttl)
+    except OperationFailure as e:
+        if e.code != 85:
+            raise
+        await workout_logs_col.drop_index("timestamp_1")
+        await workout_logs_col.create_index("timestamp", expireAfterSeconds=ttl)

@@ -15,8 +15,18 @@ from garmin import (
     workout_url,
 )
 from garmin_curl_login import GarminInvalidCredentials
-from user import get_user, save_user, delete_user
-from session import temp_sessions
+from workout_ai import WorkoutAIConfigError
+from user import (
+    get_user,
+    save_user,
+    delete_user,
+    get_garmin_token,
+    has_garmin_auth,
+    create_indexes as create_user_indexes,
+)
+import session
+import token_crypto
+from audit import log_auth_event, create_indexes as create_audit_indexes
 from rate_limiter import (
     close_connections,
     consume,
@@ -63,7 +73,7 @@ app = Client("garmin_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN
 async def start_handler(client: Client, message: Message):
     user_id = message.from_user.id
     user_data = await get_user(user_id)
-    if user_data and user_data.get("state") == AUTHORIZED and user_data.get("garmin_auth"):
+    if user_data and user_data.get("state") == AUTHORIZED and has_garmin_auth(user_data):
         return await message.reply(
             "You are already logged in! Send me a workout plan to import.\n"
             "Use /logout first if you want to switch accounts."
@@ -71,8 +81,8 @@ async def start_handler(client: Client, message: Message):
 
     # Initialize persistent state
     await save_user(user_id, {"state": AWAIT_USERNAME})
-    # Prepare temp session storage
-    temp_sessions[user_id] = {}
+    # Drop any stale half-finished login handshake
+    await session.clear(user_id)
     await message.reply("Welcome! To get started, please enter your Garmin Connect username.")
 
 # /logout command: remove authorization
@@ -82,7 +92,17 @@ async def logout_handler(client: Client, message: Message):
     user_data = await get_user(user_id)
     if user_data and user_data.get("state") == AUTHORIZED:
         await delete_user(user_id)
-        await message.reply("You have been logged out of Garmin Connect.")
+        await log_auth_event(user_id, "logout")
+        # Honest copy: there is no revocation endpoint reachable from this flow
+        # (scraped SSO session, not a registered OAuth app), so deleting our copy
+        # is all that actually happens. Don't imply Garmin-side access was
+        # withdrawn when it wasn't.
+        await message.reply(
+            "You have been logged out — I deleted your stored Garmin credentials.\n\n"
+            "Note: this doesn't invalidate the session on Garmin's side. If you "
+            "want to be certain it can never be used again, change your Garmin "
+            "password."
+        )
     else:
         await message.reply("You are not logged in. Use /start to log in.")
 
@@ -126,10 +146,9 @@ async def text_handler(client: Client, message: Message):
 
     # Handle username entry
     if state == AWAIT_USERNAME:
-        # temp_sessions is a 5-minute TTLCache while `state` lives in Mongo, so the
-        # entry can expire between /start and the username arriving. Re-create it
-        # rather than KeyError-ing on a subscript.
-        temp_sessions[user_id] = {"username": message.text.strip()}
+        # The handshake entry has a 5-minute TTL while `state` lives in Mongo, so
+        # it can expire between /start and the username arriving. (Re)create it.
+        await session.set_username(user_id, message.text.strip())
         # Update persistent state to await password
         user_data["state"] = AWAIT_PASSWORD
         await save_user(user_id, user_data)
@@ -138,18 +157,17 @@ async def text_handler(client: Client, message: Message):
 
     # Handle password entry and attempt login
     if state == AWAIT_PASSWORD:
-        session = temp_sessions.get(user_id)
-        if not session or "username" not in session:
+        username = await session.get_username(user_id)
+        if not username:
             await delete_user(user_id)
             return await message.reply("Session expired or invalid. Please use /start to log in again.")
 
         password = message.text.strip()
-        username = session["username"]
         await message.reply("Logging in to Garmin Connect...")
         try:
             token = await login_to_garmin(username, password)
             # Clean up raw credentials
-            temp_sessions.pop(user_id, None)
+            await session.clear(user_id)
             # Scrub the password from the chat history now that login succeeded.
             try:
                 await message.delete()
@@ -158,12 +176,15 @@ async def text_handler(client: Client, message: Message):
             # Store only token and authorized state
             user_data.update({"garmin_auth": token, "state": AUTHORIZED})
             await save_user(user_id, user_data)
+            await log_auth_event(user_id, "login_success")
             return await message.reply(
                 "Successfully logged in! Send me any workout plan (text) to import into your Garmin Connect account."
             )
         except Exception as e:
-            temp_sessions.pop(user_id, None)
+            await session.clear(user_id)
             await delete_user(user_id)
+            # Class name only — never the exception body, which can echo credentials.
+            await log_auth_event(user_id, "login_failure", outcome="fail", detail=type(e).__name__)
             print(
                 f"[login] user={user_id} method={os.getenv('GARMIN_LOGIN_METHOD', 'garth')} "
                 f"err={type(e).__name__}: {e}",
@@ -230,8 +251,19 @@ async def text_handler(client: Client, message: Message):
                 return await message.reply(
                     "I'm handling a lot of workouts right now. Send that again in a moment."
                 )
-            # Past this point a slot was held and the provider call was issued, so the
-            # request was almost certainly billed. Do NOT refund: quota tracks spend, and
+            except WorkoutAIConfigError as e:
+                # Our misconfiguration (unknown provider, missing API key), raised
+                # strictly before any provider request — nothing was billed, and
+                # blaming the user's input for our env var would be a lie.
+                await refund(user_id, receipt)
+                print(f"[config] user={user_id} err={e}", flush=True)
+                await log_workout_request(user_id=user_id, prompt=workout_data, error=f"config: {e}")
+                return await message.reply(
+                    "Something's broken on my side. Please try again later."
+                )
+            # The invariant the handlers above and below draw: REFUND IFF NO PROVIDER
+            # REQUEST WAS ISSUED. Past this point a slot was held and the call went
+            # out, so the request was billed. Do NOT refund: quota tracks spend, and
             # refunding here would make malformed input free to retry in a loop — the
             # exact "failures cost nothing" hole that consuming up-front closes.
             except asyncio.TimeoutError:
@@ -247,10 +279,19 @@ async def text_handler(client: Client, message: Message):
                     "with distances and paces, e.g. '2km warmup, 10x400m @ 3:45, 2km cooldown'."
                 )
 
-            token = user_data["garmin_auth"]
+            try:
+                token = await get_garmin_token(user_data)
+            except Exception as e:
+                # InvalidTag (tampered/swapped ciphertext) or a key mismatch after a
+                # bad rotation. The stored credential is unusable; re-login is the fix.
+                print(f"[token] user={user_id} decrypt failed: {type(e).__name__}: {e}", flush=True)
+                await log_workout_request(user_id=user_id, prompt=workout_data, error="token decrypt failed")
+                return await message.reply(
+                    "Your stored Garmin session is unreadable. Use /logout then /start to log in again."
+                )
             try:
                 try:
-                    workout_id = await upload_parsed_workout(token, workout_json)
+                    workout_id, refreshed = await upload_parsed_workout(token, workout_json)
                 except GarminAuthExpired:
                     # Token expired — refresh via OAuth1 (no SSO hit) and re-upload the
                     # ALREADY-PARSED workout. Re-running the plan through the LLM here
@@ -264,11 +305,13 @@ async def text_handler(client: Client, message: Message):
                     try:
                         new_token = await refresh_token_async(token)
                     except Exception as e:
+                        await log_auth_event(user_id, "token_refresh", outcome="fail", detail=type(e).__name__)
                         raise GarminAuthExpired(f"refresh failed: {e}") from e
                     user_data["garmin_auth"] = new_token
                     await save_user(user_id, user_data)
+                    await log_auth_event(user_id, "token_refresh", detail="reactive-401")
                     await message.reply("Session refreshed, retrying upload...")
-                    workout_id = await upload_parsed_workout(new_token, workout_json)
+                    workout_id, refreshed = await upload_parsed_workout(new_token, workout_json)
             except GarminAuthExpired:
                 await log_workout_request(user_id=user_id, prompt=workout_data, error="auth refresh failed")
                 return await message.reply(
@@ -285,6 +328,13 @@ async def text_handler(client: Client, message: Message):
                     error=f"{type(e).__name__}: {e}",
                 )
                 return await message.reply("Failed to import workout into Garmin. Please try again.")
+
+            if refreshed:
+                # garth refreshed OAuth2 inside the upload. Persist it or every
+                # subsequent upload re-pays this refresh round-trip forever.
+                user_data["garmin_auth"] = refreshed
+                await save_user(user_id, user_data)
+                await log_auth_event(user_id, "token_refresh", detail="garth-internal")
 
             processing_time = (time.monotonic() - start) * 1000
             await log_workout_request(
@@ -310,11 +360,16 @@ async def startup():
 
     init_rate_limiter() raises if REDIS_URL is absent and the bypass was not made
     explicit — a missing env var must crash the deploy, not silently disable the
-    only thing bounding our LLM spend.
+    only thing bounding our LLM spend. token_crypto.init() applies the same
+    policy to TOKEN_ENC_KEY: no key and no explicit TOKEN_ENC_DISABLED=1 means
+    no deploy, not silent plaintext writes.
     """
-    init_rate_limiter()
+    await init_rate_limiter()
+    token_crypto.init()
+    await create_user_indexes()
     await create_workout_indexes()
-    print("✓ Workout log indexes created")
+    await create_audit_indexes()
+    print("✓ Mongo indexes created (users, workout_logs, auth_events)")
 
 
 async def shutdown():

@@ -201,7 +201,8 @@ def _client_for(token: str) -> GarthClient:
 def upload_workout_to_garmin(token: str, workout_plan: str) -> str:
     workout_json = plan_to_json(workout_plan)
     garmin_json = convert(workout_json)
-    return upload_garmin_payload(token, garmin_json)
+    workout_id, _refreshed = upload_garmin_payload(token, garmin_json)
+    return workout_id
 
 
 def _http_status(e: Exception) -> int | None:
@@ -233,14 +234,28 @@ def _raise_if_auth_expired(e: Exception) -> None:
         raise GarminAuthExpired(str(e)) from e
 
 
-def upload_garmin_payload(token: str, garmin_json: dict) -> str:
+def upload_garmin_payload(token: str, garmin_json: dict) -> tuple[str, str | None]:
+    """Upload one workout. Returns (workout_id, refreshed_token_or_None).
+
+    garth refreshes OAuth2 internally when `expires_at` has passed (Client.request
+    -> refresh_oauth2 -> sso.exchange). Discarding the client here used to discard
+    that refresh with it, so one hour after login every upload paid a refresh
+    round-trip forever — the stored token never advanced past its original OAuth2
+    half. Compare dumps() against what we loaded and surface the new blob so the
+    caller can persist it.
+
+    The first upload after a curl-path login reports a "refresh" that is really
+    just dumps() canonicalising the JSON field order; the caller persists it once
+    and the comparison is stable from then on.
+    """
     client = _client_for(token)
     try:
         result = client.connectapi("/workout-service/workout", method="POST", json=garmin_json)
     except Exception as e:
         _raise_if_auth_expired(e)
         raise
-    return result["workoutId"]
+    refreshed = client.dumps()
+    return result["workoutId"], (refreshed if refreshed != token else None)
 
 
 async def parse_plan(workout_plan: str) -> dict:
@@ -268,8 +283,11 @@ async def parse_plan(workout_plan: str) -> dict:
         _llm_sem.release()
 
 
-async def upload_parsed_workout(token: str, workout_json: dict) -> str:
+async def upload_parsed_workout(token: str, workout_json: dict) -> tuple[str, str | None]:
     """Upload an already-parsed workout. Safe to retry — costs no LLM tokens.
+
+    Returns (workout_id, refreshed_token_or_None); persist the second element
+    when present or the next upload re-pays garth's internal refresh.
 
     Raises:
         GarminAuthExpired: the token is stale; refresh and call again.
@@ -287,5 +305,5 @@ async def upload_workout_to_garmin_async(
     """
     start_time = time.time()
     workout_json = await parse_plan(workout_plan)
-    workout_id = await upload_parsed_workout(token, workout_json)
+    workout_id, _refreshed = await upload_parsed_workout(token, workout_json)
     return workout_id, workout_json, (time.time() - start_time) * 1000

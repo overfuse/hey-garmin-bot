@@ -7,6 +7,7 @@ come back silently — the old implementation passed zero of them.
 import asyncio
 
 import pytest
+import pytest_asyncio
 import fakeredis.aioredis
 
 import rate_limiter as rl
@@ -17,13 +18,16 @@ def redis():
     return fakeredis.aioredis.FakeRedis(decode_responses=True)
 
 
-@pytest.fixture
-def limiter(redis, monkeypatch):
+@pytest_asyncio.fixture
+async def limiter(redis, monkeypatch):
     """A limiter with small, fast windows: 3/hour, 5/day, 6/month.
 
     `init()` writes module globals that monkeypatch can't know about, so register
     them first — otherwise a live client and script leak into every later test,
     including the ones that assert on an *uninitialised* limiter.
+
+    Async because init() now pings Redis before declaring itself ready
+    (fakeredis answers ping, so no extra double is needed).
     """
     monkeypatch.setattr(rl, "DISABLED", False)
     monkeypatch.setattr(rl, "FAIL_OPEN", False)
@@ -31,7 +35,7 @@ def limiter(redis, monkeypatch):
     monkeypatch.setattr(rl, "_WIDEST", 2592000)
     monkeypatch.setattr(rl, "redis_client", None)
     monkeypatch.setattr(rl, "_consume_script", None)
-    rl.init(client=redis)
+    await rl.init(client=redis)
     return rl
 
 
@@ -182,9 +186,31 @@ async def test_stats_reports_each_window_independently(limiter):
     assert stats["monthly"]["used"] == 3    # a, b, c
 
 
-def test_missing_redis_url_refuses_to_start(monkeypatch):
+@pytest.mark.asyncio
+async def test_missing_redis_url_refuses_to_start(monkeypatch):
     """A missing env var must be a startup error, not a silent bypass."""
     monkeypatch.setattr(rl, "DISABLED", False)
     monkeypatch.setattr(rl, "REDIS_URL", "")
     with pytest.raises(RuntimeError, match="RATE_LIMIT_DISABLED"):
-        rl.init()
+        await rl.init()
+
+
+@pytest.mark.asyncio
+async def test_unreachable_redis_refuses_to_start(monkeypatch):
+    """A typo'd REDIS_URL must crash the deploy at startup, not convert into a
+    total outage on the first workout (init used to build a lazy client and a
+    local script object without ever touching the network)."""
+
+    class DeadRedis:
+        async def ping(self):
+            raise ConnectionError("connection refused")
+
+        def register_script(self, script):  # must not be reached
+            raise AssertionError("registered a script on a dead connection")
+
+    monkeypatch.setattr(rl, "DISABLED", False)
+    monkeypatch.setattr(rl, "redis_client", None)
+    monkeypatch.setattr(rl, "_consume_script", None)
+    with pytest.raises(ConnectionError):
+        await rl.init(client=DeadRedis())
+    assert rl.redis_client is None  # no half-initialised state left behind

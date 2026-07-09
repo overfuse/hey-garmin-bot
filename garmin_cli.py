@@ -215,7 +215,7 @@ def main() -> None:
             sys.exit(0)
         token = token_from_session(session_path)
         # Upload exactly the validated payload
-        result_id = upload_garmin_payload(token, gj)
+        result_id, _refreshed = upload_garmin_payload(token, gj)
         print(workout_url(result_id))
     except Exception as e:
         print(f"Failed to upload workout: {e}", file=sys.stderr)
