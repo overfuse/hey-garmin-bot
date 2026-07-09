@@ -75,6 +75,8 @@ def exec_step(step_order: int, meta_key: str, *,
               distance: Optional[int] = None,
               pace: Optional[str] = None,
               rest: Optional[int] = None,
+              description: Optional[str] = None,
+              lap: bool = False,
               child: bool = False) -> Dict[str, Any]:
     """Build one executable step.
 
@@ -84,6 +86,11 @@ def exec_step(step_order: int, meta_key: str, *,
     the eval suite scored it as a pass, and the watch received "warm up until you
     press the lap button". Any step with a distance ends on distance; any step
     with a pace carries a pace target.
+
+    `lap=True` opts a distance-less step into the lap-button end condition. It is
+    an explicit flag, not a general fallback: a distance-less *interval* is still
+    a modelling error and must keep raising, while a break step (in-place drill,
+    no distance by design) legitimately ends on the lap press.
     """
     if meta_key not in STEP_META:
         raise ValueError(f"Unknown meta_key {meta_key}")
@@ -93,6 +100,8 @@ def exec_step(step_order: int, meta_key: str, *,
         "stepOrder": step_order,
         "stepType": STEP_META[meta_key].copy(),
     }
+    if description is not None:
+        dto["description"] = description
     if child:
         dto["childStepId"] = 1
 
@@ -124,10 +133,11 @@ def exec_step(step_order: int, meta_key: str, *,
             "durationType": {"workoutStepDurationTypeKey": "distance"},
             "durationValue": distance,
         })
-    elif meta_key in ("warmup", "cooldown"):
-        # Only a distance-less warmup/cooldown falls back to the lap button, which
-        # is what SYSTEM_PROMPT.md promises ("still include the section without
-        # distance — transition occurs by pressing the Lap button").
+    elif lap or meta_key in ("warmup", "cooldown"):
+        # Lap-button end: a distance-less warmup/cooldown (SYSTEM_PROMPT.md
+        # promises "still include the section without distance — transition
+        # occurs by pressing the Lap button"), or a step that asked for it
+        # explicitly via `lap=True` (break steps).
         dto.update({
             "endCondition": END_LAP,
             "endConditionValue": 0.0,
@@ -179,6 +189,11 @@ def convert(interval_json: Dict[str, Any]) -> Dict[str, Any]:
         if etype == "recovery":
             order += 1
             return exec_step(order, "recovery", distance=elem["distance"], child=nested)
+        if etype == "break":
+            # In-place drill between runs (e.g. "30 frog jumps"): a recovery step
+            # with no distance, named on screen, ended by the lap press.
+            order += 1
+            return exec_step(order, "recovery", description=elem["name"], lap=True, child=nested)
         if etype == "rest":
             order += 1
             return exec_step(order, "rest", rest=elem["rest"], child=nested)

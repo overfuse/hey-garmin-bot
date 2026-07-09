@@ -74,6 +74,33 @@ def test_paceless_run_becomes_a_recovery_with_no_target():
     assert step["targetType"]["workoutTargetTypeKey"] == "no.target"
 
 
+def test_break_step_is_a_named_lap_ended_recovery():
+    """An in-place drill ("30 frog jumps") has no distance and no duration: it
+    must surface as a recovery step that shows the exercise and waits for the
+    lap press — not get dropped, and not demand a distance it cannot have."""
+    payload = convert({"intervals": [{"type": "break", "name": "30 frog jumps"}]})
+    step = _steps(payload)[0]
+    assert step["stepType"]["stepTypeKey"] == "recovery"
+    assert step["endCondition"]["conditionTypeKey"] == "lap.button"
+    assert step["endConditionValue"] == 0.0
+    assert step["targetType"]["workoutTargetTypeKey"] == "no.target"
+    assert step["description"] == "30 frog jumps"
+
+
+def test_break_step_inside_repeat_is_marked_as_child():
+    payload = convert({
+        "intervals": [{
+            "type": "repeat", "repeat": 3,
+            "steps": [{"type": "run", "distance": 1000, "pace": "04:30"},
+                      {"type": "break", "name": "20 squats"}],
+        }]
+    })
+    brk = _steps(payload)[0]["workoutSteps"][1]
+    assert brk["childStepId"] == 1
+    assert brk["endCondition"]["conditionTypeKey"] == "lap.button"
+    assert brk["description"] == "20 squats"
+
+
 def test_rest_step_ends_on_time_not_distance():
     payload = convert({"intervals": [{"type": "rest", "rest": 90}]})
     step = _steps(payload)[0]

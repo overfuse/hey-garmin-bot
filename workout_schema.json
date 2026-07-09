@@ -97,6 +97,20 @@
         }
       }
     },
+    "breakStep": {
+      "type": "object",
+      "description": "A non-running drill done in place between runs (strength, plyometrics, mobility). Ends on the lap button.",
+      "required": ["type", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "break" },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "The exercise, e.g. '30 frog jumps'"
+        }
+      }
+    },
     "repeatGroup": {
       "type": "object",
       "description": "A grouping that repeats its internal steps in order.",
@@ -121,6 +135,7 @@
         { "$ref": "#/definitions/runStep" },
         { "$ref": "#/definitions/restStep" },
         { "$ref": "#/definitions/recoveryStep" },
+        { "$ref": "#/definitions/breakStep" },
         { "$ref": "#/definitions/repeatGroup" }
       ]
     }

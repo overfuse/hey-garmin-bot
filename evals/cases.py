@@ -194,4 +194,81 @@ C5 = Case(
 )
 
 
-CASES = [C1, C2, C3, C4, C5]
+# --- Case 6: exercise blocks between easy runs + "N раз X/Y" rep count -------
+# Three failure modes seen live with this exact workout: (a) the four strength
+# lines were dropped wholesale (no schema slot for them pre-BreakStep), (b) the
+# interior easy 3 km / 2 km vanished once the first/last easy runs were claimed
+# by warmup/cooldown, and (c) "5 раз 200/200" was parsed via the distance-budget
+# rule (flat 5 runs / 4 recoveries = 1800 m) instead of as a rep count.
+def _is_easy(e, dist):
+    """A pace-less easy segment of `dist` (recovery, or run without pace)."""
+    return (e.get("distance") == dist and e.get("type") in ("recovery", "run")
+            and not e.get("pace"))
+
+
+def _easy(r, dist):
+    return [e for e in _intervals(r) if _is_easy(e, dist)]
+
+
+def _c6_body(r):
+    """Intervals, minus an accepted trailing easy-1km stand-in for cooldown.
+
+    gpt-4.1-mini stably emits the closing "1 км легко" as a trailing pace-less
+    run instead of `cooldown`. On the watch the two are the same step minus the
+    label, so the checks accept either — but only when `cooldown` is absent, so
+    a model that emits BOTH (duplicating the kilometre) still fails.
+    """
+    seq = list(_intervals(r))
+    if seq and not _cooldown(r) and _is_easy(seq[-1], 1000):
+        seq = seq[:-1]
+    return seq
+
+
+def _c6_cooldown_ok(r):
+    return _cooldown(r) == 1000 or (
+        not _cooldown(r) and bool(_intervals(r)) and _is_easy(_intervals(r)[-1], 1000))
+
+
+def _c6_order(r):
+    """break, break, easy 3000, break, break, easy 2000, repeat — exactly."""
+    seq = _c6_body(r)
+    types = [e.get("type") for e in seq]
+    return (len(seq) == 7
+            and types[0] == types[1] == types[3] == types[4] == "break"
+            and seq[2].get("distance") == 3000
+            and seq[5].get("distance") == 2000
+            and types[6] == "repeat")
+
+
+C6 = Case(
+    name="breaks-between-runs",
+    prompt=(
+        "3 км легко\n"
+        "30 лягушек вперед\n"
+        "30 выпрыгиваний из глубокого приседа вверх\n"
+        "3 км легко\n"
+        "30 лягушек вперед\n"
+        "30 выпрыгиваний из глубокого приседа вверх\n"
+        "2 км легко\n"
+        "5 раз 200/200 на ритм\n"
+        "1 км легко"
+    ),
+    expected="wu 3000; break×2; easy 3000; break×2; easy 2000; 5x[run200,recovery200]; cd 1000 (or trailing easy 1km)",
+    checks=[
+        ("warm/cool", lambda r: _warmup(r) == 3000 and _c6_cooldown_ok(r)),
+        ("4 break steps", lambda r: sum(
+            1 for e in _intervals(r) if e.get("type") == "break") == 4),
+        ("interior 3km & 2km kept", lambda r: len(_easy(r, 3000)) == 1
+            and len(_easy(r, 2000)) == 1),
+        ("5x[200/200] repeat", lambda r: any(
+            g.get("repeat") == 5 and len(g["steps"]) == 2
+            and g["steps"][0].get("distance") == 200
+            and g["steps"][1].get("distance") == 200
+            and g["steps"][1].get("type") == "recovery"
+            for g in _repeats(r))),
+        ("order", _c6_order),
+    ],
+)
+
+
+CASES = [C1, C2, C3, C4, C5, C6]

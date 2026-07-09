@@ -50,10 +50,19 @@ class RecoveryStep(BaseModel):
     distance: int = Field(ge=1, le=MAX_DISTANCE_M, description="Distance in metres")
 
 
+class BreakStep(BaseModel):
+    """A non-running drill done in place between runs (strength, plyometrics,
+    mobility). It has no distance and no reliable duration, so on the watch it
+    ends on the lap button; `name` is what the athlete sees on screen."""
+
+    type: Literal["break"]
+    name: str = Field(max_length=100, description="The exercise, e.g. '30 frog jumps'")
+
+
 # A repeat group only ever holds leaf steps — workouts never nest a repeat inside
 # a repeat. Keeping `steps` non-recursive is also required by Anthropic structured
 # outputs, which reject self-referencing schemas (`RepeatGroup -> RepeatGroup`).
-LeafElement = Union[RunStep, RestStep, RecoveryStep]
+LeafElement = Union[RunStep, RestStep, RecoveryStep, BreakStep]
 
 
 class RepeatGroup(BaseModel):
@@ -67,7 +76,7 @@ class RepeatGroup(BaseModel):
 # Plain union -> JSON Schema `anyOf` (OpenAI structured outputs rejects the
 # `oneOf` that a Pydantic discriminated union would emit). The distinct
 # Literal `type` tags still let Pydantic select the right variant on parse.
-Element = Union[RunStep, RestStep, RecoveryStep, RepeatGroup]
+Element = Union[RunStep, RestStep, RecoveryStep, BreakStep, RepeatGroup]
 
 
 class Segment(BaseModel):
