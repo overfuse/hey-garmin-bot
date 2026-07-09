@@ -1,6 +1,7 @@
-from dotenv import load_dotenv, find_dotenv
 import sys
 from pathlib import Path
+
+from dotenv import find_dotenv, load_dotenv
 
 
 def pytest_sessionstart(session):

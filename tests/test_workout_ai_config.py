@@ -5,11 +5,12 @@ import pytest
 
 import workout_ai
 from workout_ai import WorkoutAIConfigError
+from workout_ai import config as workout_ai_config
 
 
 @pytest.mark.asyncio
 async def test_unknown_provider_is_a_config_error(monkeypatch):
-    monkeypatch.setattr(workout_ai, "PROVIDER", "grok")
+    monkeypatch.setattr(workout_ai_config, "PROVIDER", "grok")
     with pytest.raises(WorkoutAIConfigError, match="WORKOUT_AI_PROVIDER"):
         await workout_ai.plan_to_json_async("easy 5k")
 

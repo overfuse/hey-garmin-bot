@@ -15,7 +15,7 @@ scaling out needs one dispatcher feeding a work queue, not N bots.
 
 from cachetools import TTLCache
 
-import rate_limiter
+import redis_conn
 
 TTL_S = 300
 
@@ -27,7 +27,7 @@ def _key(uid: int) -> str:
 
 
 async def set_username(uid: int, username: str) -> None:
-    r = rate_limiter.redis_client
+    r = redis_conn.client
     if r is not None:
         await r.setex(_key(uid), TTL_S, username)
     else:
@@ -35,14 +35,14 @@ async def set_username(uid: int, username: str) -> None:
 
 
 async def get_username(uid: int) -> str | None:
-    r = rate_limiter.redis_client
+    r = redis_conn.client
     if r is not None:
         return await r.get(_key(uid))
     return _fallback.get(uid)
 
 
 async def clear(uid: int) -> None:
-    r = rate_limiter.redis_client
+    r = redis_conn.client
     if r is not None:
         await r.delete(_key(uid))
     else:

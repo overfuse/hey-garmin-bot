@@ -1,15 +1,34 @@
 #!/usr/bin/env python3
 
+import argparse
+import asyncio
+import getpass
 import os
 import sys
-import asyncio
-import argparse
-import getpass
+
+import garth
 from dotenv import load_dotenv
-from garmin import login_to_garmin, upload_workout_to_garmin, token_from_session, upload_garmin_payload, workout_url
-from workout_ai import plan_to_json
+
+from garmin import login_to_garmin, upload_garmin_payload, workout_url
 from garmin_convert import convert
 from validate_garmin import validate_garmin_workout
+from workout_ai import plan_to_json
+
+
+def token_from_session(session_path: str = "~/.garth") -> str:
+    """Load a garth token from a saved session directory."""
+    path = os.path.expanduser(session_path)
+    garth.resume(path)
+    return garth.client.dumps()
+
+
+def upload_plan(token: str, workout_plan: str) -> str:
+    """Parse + convert + upload in one shot. CLI-only: ungated and unmetered —
+    the bot goes through workout_service so quota and the LLM gate apply."""
+    workout_json = plan_to_json(workout_plan)
+    garmin_json = convert(workout_json)
+    workout_id, _refreshed = upload_garmin_payload(token, garmin_json)
+    return workout_id
 
 
 def read_plan_from_args_or_stdin(file_path: str | None) -> str:
@@ -127,7 +146,7 @@ def chat_loop() -> None:
                 try:
                     if token is None:
                         token = token_from_session(session_path)
-                    workout_id = upload_workout_to_garmin(token, text)
+                    workout_id = upload_plan(token, text)
                     print(f"Uploaded: {workout_url(workout_id)}")
                     buffer.clear()
                 except Exception as e:

@@ -9,3 +9,11 @@ class WorkoutAIConfigError(Exception):
     refund the user's quota unit: nothing was billed, and the failure is ours,
     not their input's.
     """
+
+
+class LLMBusy(Exception):
+    """Every LLM slot was occupied and none freed up within LLM_QUEUE_WAIT_S.
+
+    Deliberately NOT a TimeoutError subclass: no provider call was made, so callers
+    must not report this as "parsing timed out" or bill it as a spent attempt.
+    """

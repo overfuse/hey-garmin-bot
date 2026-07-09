@@ -4,14 +4,14 @@ import fakeredis.aioredis
 import pytest
 from cachetools import TTLCache
 
-import rate_limiter
+import redis_conn
 import session
 
 
 @pytest.fixture
 def redis(monkeypatch):
     client = fakeredis.aioredis.FakeRedis(decode_responses=True)
-    monkeypatch.setattr(rate_limiter, "redis_client", client)
+    monkeypatch.setattr(redis_conn, "client", client)
     return client
 
 
@@ -32,7 +32,7 @@ async def test_redis_entry_has_ttl(redis):
 
 @pytest.mark.asyncio
 async def test_fallback_without_redis(monkeypatch):
-    monkeypatch.setattr(rate_limiter, "redis_client", None)
+    monkeypatch.setattr(redis_conn, "client", None)
     monkeypatch.setattr(session, "_fallback", TTLCache(maxsize=10, ttl=300))
     await session.set_username(2, "local@example.com")
     assert await session.get_username(2) == "local@example.com"

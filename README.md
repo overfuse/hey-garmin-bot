@@ -31,11 +31,14 @@ Try it live: [HeyGarminBot on Telegram](https://t.me/HeyGarminBot)
 ## Repository Structure
 
 ```text
-├── bot.py              # Main script for the Telegram bot
-├── workout_ai/         # Workout parser: provider-agnostic (openai/claude) plan_to_json
+├── bot.py              # Telegram layer: handlers, single-flighting, user-facing copy
+├── workout_service.py  # Core use case: quota → parse → upload → refresh, typed outcomes
+├── workout_ai/         # Workout parser: providers, config, and the LLM concurrency gate
 ├── garmin.py           # Garmin Connect API integration
 ├── garmin_convert.py   # Workout JSON to Garmin format converter
 ├── rate_limiter.py     # Redis-based rate limiting with fallback
+├── db.py               # Shared MongoDB client (users, workout logs, audit events)
+├── redis_conn.py       # Shared Redis handle (limiter + login session storage)
 ├── workout_log.py      # MongoDB workout logging
 ├── user.py             # User CRUD helpers for MongoDB
 ├── session.py          # Temporary session storage

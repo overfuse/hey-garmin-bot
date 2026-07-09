@@ -16,8 +16,8 @@ Worker proxy — see GARMIN_OAUTH_PROXY below.
 import base64
 import json
 import os
-import time
 import re
+import time
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 import requests

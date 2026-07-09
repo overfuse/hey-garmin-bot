@@ -2,15 +2,13 @@ import os
 
 from openai import AsyncOpenAI, OpenAIError
 
+from ..config import LLM_TIMEOUT_S
 from ..errors import WorkoutAIConfigError
 from ..models import Workout
 
 NAME = "openai"
 DEFAULT_MODEL = "gpt-4.1-mini"
 
-# The SDK defaults to a 600s timeout. A caller holding a concurrency slot for ten
-# minutes is indistinguishable from an outage, so cap it well below that.
-TIMEOUT_S = float(os.environ.get("LLM_TIMEOUT_S", "45"))
 MAX_TOKENS = 2000  # must match evals/models.py — truncation is a production bug
 
 # gpt-4.1-mini is a chat model: temperature=0 + a fixed seed give near-deterministic
@@ -22,7 +20,7 @@ async def plan(system_prompt: str, description: str, model: str) -> Workout:
     # Construction raises on a missing key — before any request is issued, which
     # is what lets the caller refund the quota unit for our misconfiguration.
     try:
-        client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"), timeout=TIMEOUT_S)
+        client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"), timeout=LLM_TIMEOUT_S)
     except OpenAIError as e:
         raise WorkoutAIConfigError(f"OpenAI client init failed: {e}") from e
     completion = await client.chat.completions.parse(

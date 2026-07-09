@@ -22,6 +22,7 @@ python interval_to_garmin_schema.py interval.json garmin.json
 Omit the second argument to print the converted JSON to *stdout*.
 """
 from __future__ import annotations
+
 import json
 import sys
 from typing import Any, Dict, List, Optional, Tuple

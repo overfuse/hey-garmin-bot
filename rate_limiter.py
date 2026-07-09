@@ -30,6 +30,8 @@ import os
 import time
 import uuid
 
+import redis_conn
+
 # Configurable limits. (label, window_seconds, cap) — ordered narrowest first so
 # the most specific limit is the one reported to the user.
 WINDOWS = (
@@ -46,7 +48,8 @@ REDIS_URL = os.getenv("REDIS_URL", "")
 DISABLED = os.getenv("RATE_LIMIT_DISABLED", "") == "1"
 FAIL_OPEN = os.getenv("RATE_LIMIT_FAIL_OPEN", "") == "1"
 
-redis_client = None
+# The connected client itself lives in redis_conn (shared with session.py);
+# only the registered Lua script is this module's own state.
 _consume_script = None
 
 
@@ -145,7 +148,7 @@ async def init(client=None) -> None:
 
     Pass `client` to inject a fake in tests.
     """
-    global redis_client, _consume_script
+    global _consume_script
 
     if DISABLED:
         print("⚠️  RATE_LIMIT_DISABLED=1 — rate limiting is OFF", flush=True)
@@ -164,9 +167,12 @@ async def init(client=None) -> None:
     # Prove the connection before publishing any state or claiming success.
     await client.ping()
 
-    redis_client = client
+    redis_conn.client = client
     _consume_script = client.register_script(_CONSUME_LUA)
-    print(f"✓ Rate limiting active ({', '.join(f'{c}/{l}' for l, _, c in WINDOWS)})", flush=True)
+    print(
+        f"✓ Rate limiting active ({', '.join(f'{cap}/{label}' for label, _, cap in WINDOWS)})",
+        flush=True,
+    )
 
 
 async def consume(user_id: int) -> str | None:
@@ -209,10 +215,10 @@ async def consume(user_id: int) -> str | None:
 
 async def refund(user_id: int, receipt: str | None) -> None:
     """Return quota consumed by work that failed. Best-effort: never raises."""
-    if not receipt or redis_client is None:
+    if not receipt or redis_conn.client is None:
         return
     try:
-        await redis_client.zrem(_key(user_id), receipt)
+        await redis_conn.client.zrem(_key(user_id), receipt)
     except Exception as e:
         print(f"⚠️  Rate limit refund failed for {user_id}: {e}", flush=True)
 
@@ -224,13 +230,13 @@ async def get_user_stats(user_id: int) -> dict:
             label: {"used": 0, "limit": cap} for label, _, cap in WINDOWS
         } | {"note": "Rate limiting disabled (RATE_LIMIT_DISABLED=1)"}
 
-    if redis_client is None:
+    if redis_conn.client is None:
         raise RateLimiterUnavailable("rate limiter not initialised; call init()")
 
     now = time.time()
     key = _key(user_id)
     try:
-        pipe = redis_client.pipeline()
+        pipe = redis_conn.client.pipeline()
         for _, window, _cap in WINDOWS:
             pipe.zcount(key, now - window, now)
         counts = await pipe.execute()
@@ -239,7 +245,7 @@ async def get_user_stats(user_id: int) -> dict:
 
     return {
         label: {"used": int(used), "limit": cap}
-        for (label, _, cap), used in zip(WINDOWS, counts)
+        for (label, _, cap), used in zip(WINDOWS, counts, strict=True)
     }
 
 
@@ -249,7 +255,7 @@ async def close_connections() -> bool:
     Returns True if a live pool was actually closed, False when there was
     nothing to close (e.g. RATE_LIMIT_DISABLED=1 — init() never opened one).
     """
-    if redis_client is None:
+    if redis_conn.client is None:
         return False
-    await redis_client.aclose()
+    await redis_conn.client.aclose()
     return True

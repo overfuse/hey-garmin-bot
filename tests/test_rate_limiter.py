@@ -6,11 +6,12 @@ come back silently — the old implementation passed zero of them.
 
 import asyncio
 
+import fakeredis.aioredis
 import pytest
 import pytest_asyncio
-import fakeredis.aioredis
 
 import rate_limiter as rl
+import redis_conn
 
 
 @pytest.fixture
@@ -33,7 +34,7 @@ async def limiter(redis, monkeypatch):
     monkeypatch.setattr(rl, "FAIL_OPEN", False)
     monkeypatch.setattr(rl, "WINDOWS", (("hourly", 3600, 3), ("daily", 86400, 5), ("monthly", 2592000, 6)))
     monkeypatch.setattr(rl, "_WIDEST", 2592000)
-    monkeypatch.setattr(rl, "redis_client", None)
+    monkeypatch.setattr(redis_conn, "client", None)
     monkeypatch.setattr(rl, "_consume_script", None)
     await rl.init(client=redis)
     return rl
@@ -75,7 +76,7 @@ async def test_daily_window_fires_when_hourly_has_room(limiter, monkeypatch):
 
     now = time.time()
     key = rl._key(7)
-    await limiter.redis_client.zadd(key, {f"old-{i}": now - 7200 - i for i in range(5)})
+    await redis_conn.client.zadd(key, {f"old-{i}": now - 7200 - i for i in range(5)})
 
     # Hourly window is empty, so hourly must not be the blocker...
     with pytest.raises(rl.RateLimitExceeded) as exc:
@@ -90,7 +91,7 @@ async def test_monthly_window_survives_the_prune(limiter):
     now = time.time()
     key = rl._key(8)
     # 6 requests, 3 days old: outside hourly and daily, inside monthly (cap 6).
-    await limiter.redis_client.zadd(key, {f"old-{i}": now - 259200 - i for i in range(6)})
+    await redis_conn.client.zadd(key, {f"old-{i}": now - 259200 - i for i in range(6)})
 
     with pytest.raises(rl.RateLimitExceeded) as exc:
         await limiter.consume(8)
@@ -103,10 +104,10 @@ async def test_prune_discards_members_past_the_widest_window(limiter):
 
     now = time.time()
     key = rl._key(9)
-    await limiter.redis_client.zadd(key, {f"ancient-{i}": now - 2592000 - 100 - i for i in range(6)})
+    await redis_conn.client.zadd(key, {f"ancient-{i}": now - 2592000 - 100 - i for i in range(6)})
 
     await limiter.consume(9)  # admitted: the ancient entries fall outside every window
-    assert await limiter.redis_client.zcard(key) == 1
+    assert await redis_conn.client.zcard(key) == 1
 
 
 @pytest.mark.asyncio
@@ -120,7 +121,7 @@ async def test_concurrent_consumes_cannot_overshoot_the_cap(limiter):
     rejected = [r for r in results if isinstance(r, rl.RateLimitExceeded)]
     assert len(admitted) == 3
     assert len(rejected) == 7
-    assert await limiter.redis_client.zcard(rl._key(2)) == 3
+    assert await redis_conn.client.zcard(rl._key(2)) == 3
 
 
 @pytest.mark.asyncio
@@ -130,7 +131,7 @@ async def test_identical_timestamps_both_count(limiter, monkeypatch):
     monkeypatch.setattr(rl.time, "time", lambda: 1_700_000_000.0)
     await limiter.consume(3)
     await limiter.consume(3)
-    assert await limiter.redis_client.zcard(rl._key(3)) == 2
+    assert await redis_conn.client.zcard(rl._key(3)) == 2
 
 
 @pytest.mark.asyncio
@@ -147,7 +148,7 @@ async def test_refund_returns_quota(limiter):
 async def test_refund_of_unknown_receipt_is_a_noop(limiter):
     await limiter.refund(5, "never-issued")
     await limiter.refund(5, None)
-    assert await limiter.redis_client.zcard(rl._key(5)) == 0
+    assert await redis_conn.client.zcard(rl._key(5)) == 0
 
 
 @pytest.mark.asyncio
@@ -178,7 +179,7 @@ async def test_stats_reports_each_window_independently(limiter):
 
     now = time.time()
     key = rl._key(10)
-    await limiter.redis_client.zadd(key, {"a": now - 10, "b": now - 7200, "c": now - 172800})
+    await redis_conn.client.zadd(key, {"a": now - 10, "b": now - 7200, "c": now - 172800})
 
     stats = await limiter.get_user_stats(10)
     assert stats["hourly"]["used"] == 1     # a
@@ -209,8 +210,8 @@ async def test_unreachable_redis_refuses_to_start(monkeypatch):
             raise AssertionError("registered a script on a dead connection")
 
     monkeypatch.setattr(rl, "DISABLED", False)
-    monkeypatch.setattr(rl, "redis_client", None)
+    monkeypatch.setattr(redis_conn, "client", None)
     monkeypatch.setattr(rl, "_consume_script", None)
     with pytest.raises(ConnectionError):
         await rl.init(client=DeadRedis())
-    assert rl.redis_client is None  # no half-initialised state left behind
+    assert redis_conn.client is None  # no half-initialised state left behind

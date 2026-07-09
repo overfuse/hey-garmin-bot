@@ -1,12 +1,11 @@
 import os
 from datetime import datetime, timezone
 from typing import Optional
-import motor.motor_asyncio
+
 from pymongo.errors import OperationFailure
 
-MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI)
-db = mongo_client["hey_garmin"]
+from db import db
+
 workout_logs_col = db["workout_logs"]
 
 # Raw prompts are user data, not an audit trail — they must not accrue forever.
@@ -23,7 +22,7 @@ async def log_workout_request(
 ) -> str:
     """
     Log a workout generation request with its result.
-    
+
     Returns:
         The inserted document ID as string
     """
@@ -39,7 +38,7 @@ async def log_workout_request(
         "error": error,
         "processing_time_ms": processing_time_ms,
     }
-    
+
     result = await workout_logs_col.insert_one(log_entry)
     return str(result.inserted_id)
 
@@ -51,7 +50,7 @@ async def get_user_workout_history(user_id: int, limit: int = 10) -> list:
     cursor = workout_logs_col.find(
         {"user_id": user_id}
     ).sort("timestamp", -1).limit(limit)
-    
+
     return await cursor.to_list(length=limit)
 
 
@@ -71,9 +70,9 @@ async def get_workout_stats(user_id: int) -> dict:
             }
         }
     ]
-    
+
     result = await workout_logs_col.aggregate(pipeline).to_list(length=1)
-    
+
     if not result:
         return {
             "total": 0,
@@ -81,7 +80,7 @@ async def get_workout_stats(user_id: int) -> dict:
             "failed": 0,
             "avg_processing_time": 0
         }
-    
+
     stats = result[0]
     return {
         "total": stats.get("total", 0),

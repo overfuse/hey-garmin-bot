@@ -15,11 +15,8 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
-import motor.motor_asyncio
+from db import db
 
-MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-mongo_client = motor.motor_asyncio.AsyncIOMotorClient(MONGODB_URI)
-db = mongo_client["hey_garmin"]
 auth_events_col = db["auth_events"]
 
 RETENTION_DAYS = int(os.getenv("AUTH_EVENTS_RETENTION_DAYS", "365"))

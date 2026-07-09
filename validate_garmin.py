@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-
 ALLOWED_STEP_KEYS = {"warmup", "cooldown", "interval", "recovery", "rest", "repeat"}
 
 

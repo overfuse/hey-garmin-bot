@@ -2,6 +2,7 @@ import os
 
 from anthropic import AnthropicError, AsyncAnthropic
 
+from ..config import LLM_TIMEOUT_S
 from ..errors import WorkoutAIConfigError
 from ..models import Workout
 
@@ -16,7 +17,6 @@ DEFAULT_MODEL = "claude-haiku-4-5"
 # used, not the cap, so the headroom is free insurance.
 THINKING_BUDGET = 2000
 MAX_TOKENS = 8000
-TIMEOUT_S = float(os.environ.get("LLM_TIMEOUT_S", "45"))
 
 
 async def plan(system_prompt: str, description: str, model: str) -> Workout:
@@ -27,7 +27,7 @@ async def plan(system_prompt: str, description: str, model: str) -> Workout:
     if not api_key:
         raise WorkoutAIConfigError("ANTHROPIC_API_KEY is not set")
     try:
-        client = AsyncAnthropic(api_key=api_key, timeout=TIMEOUT_S)
+        client = AsyncAnthropic(api_key=api_key, timeout=LLM_TIMEOUT_S)
     except AnthropicError as e:
         raise WorkoutAIConfigError(f"Anthropic client init failed: {e}") from e
     message = await client.messages.parse(

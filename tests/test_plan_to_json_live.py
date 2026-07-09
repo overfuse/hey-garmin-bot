@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+
 from jsonschema import Draft7Validator
 
 
@@ -21,7 +22,6 @@ def test_plan_to_json_live_matches_example_when_api_key_present():
     import workout_ai as chatgpt
 
     prompt_text = _load("examples/prompts/hey-track-07-22.txt")
-    expected_json = json.loads(_load("examples/intervals/july-22.json"))
     schema = json.loads(_load("workout_schema.json"))
 
     # Генерация реального результата

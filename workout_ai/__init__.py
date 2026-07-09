@@ -1,39 +1,18 @@
-import asyncio
-import os
-from pathlib import Path
+"""Workout AI package: LLM providers, provider dispatch, and the concurrency gate.
 
-from dotenv import load_dotenv
+Env configuration lives in config.py; provider dispatch in planner.py; the
+global concurrency gate in gate.py. bot.py should call parse_plan (gated);
+plan_to_json / plan_to_json_async are the ungated primitives for CLI/eval use.
+"""
 
-from .errors import WorkoutAIConfigError
-from .providers import REGISTRY
+from .errors import LLMBusy, WorkoutAIConfigError
+from .gate import parse_plan
+from .planner import plan_to_json, plan_to_json_async
 
-load_dotenv()
-
-# Provider selection via env. Both API keys can live in .env; only the selected
-# provider's key is needed at runtime.
-#   WORKOUT_AI_PROVIDER  "claude" | "openai"   (default: claude)
-#   WORKOUT_AI_MODEL     optional override of the provider's default model
-PROVIDER = os.environ.get("WORKOUT_AI_PROVIDER", "openai").lower()
-MODEL = os.environ.get("WORKOUT_AI_MODEL")
-
-# One SYSTEM_PROMPT.md is shared by every provider. It lives at the repo root and
-# is resolved relative to this package, so it loads regardless of the CWD.
-_PROMPT_PATH = Path(__file__).resolve().parent.parent / "SYSTEM_PROMPT.md"
-
-__all__ = ["plan_to_json", "plan_to_json_async", "WorkoutAIConfigError"]
-
-
-def plan_to_json(description: str) -> dict:
-    return asyncio.run(plan_to_json_async(description))
-
-
-async def plan_to_json_async(description: str) -> dict:
-    provider = REGISTRY.get(PROVIDER)
-    if provider is None:
-        raise WorkoutAIConfigError(
-            f"Unknown WORKOUT_AI_PROVIDER={PROVIDER!r}; expected one of {sorted(REGISTRY)}"
-        )
-
-    system_prompt = _PROMPT_PATH.read_text(encoding="utf-8")
-    workout = await provider.plan(system_prompt, description, MODEL or provider.DEFAULT_MODEL)
-    return workout.model_dump(exclude_none=True)
+__all__ = [
+    "LLMBusy",
+    "WorkoutAIConfigError",
+    "parse_plan",
+    "plan_to_json",
+    "plan_to_json_async",
+]

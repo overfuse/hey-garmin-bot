@@ -1,42 +1,43 @@
-import asyncio
+"""Telegram layer: handlers, per-user single-flighting, and user-facing copy.
+
+The workout flow itself (quota, LLM parse, upload, token refresh) lives in
+workout_service.py and returns a typed Outcome; this module only decides what
+to say to the user. Login/logout stay here because they are inherently
+conversational (two-prompt handshake, scrubbing the password message).
+"""
+
 import os
-import time
 import traceback
+
+from dotenv import load_dotenv
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from dotenv import load_dotenv
-from garmin import (
-    GarminAuthExpired,
-    LLMBusy,
-    login_to_garmin,
-    parse_plan,
-    upload_parsed_workout,
-    refresh_token_async,
-    workout_url,
-)
-from garmin_curl_login import GarminInvalidCredentials
-from workout_ai import WorkoutAIConfigError
-from user import (
-    get_user,
-    save_user,
-    delete_user,
-    get_garmin_token,
-    has_garmin_auth,
-    create_indexes as create_user_indexes,
-)
+
 import session
 import token_crypto
-from audit import log_auth_event, create_indexes as create_audit_indexes
+from audit import create_indexes as create_audit_indexes
+from audit import log_auth_event
+from garmin import login_to_garmin, workout_url
+from garmin_curl_login import GarminInvalidCredentials
 from rate_limiter import (
-    close_connections,
-    consume,
-    refund,
-    get_user_stats,
-    RateLimitExceeded,
     RateLimiterUnavailable,
+    close_connections,
+    get_user_stats,
+)
+from rate_limiter import (
     init as init_rate_limiter,
 )
-from workout_log import log_workout_request, create_indexes as create_workout_indexes
+from user import (
+    create_indexes as create_user_indexes,
+)
+from user import (
+    delete_user,
+    get_user,
+    has_garmin_auth,
+    save_user,
+)
+from workout_log import create_indexes as create_workout_indexes
+from workout_service import FailureCode, Success, process_workout
 
 # Load environment variables
 load_dotenv()
@@ -64,6 +65,29 @@ _BUSY_SUFFIX = (
     "\n\n⚠️ I can only process one workout at a time. "
     "I'm ignoring new messages until this one finishes — resend them after."
 )
+
+# What each service failure sounds like to the user. {detail} is filled from
+# Failure.detail (only RATE_LIMITED uses it — the limiter's own message names
+# the window and the wait).
+_FAILURE_REPLIES: dict[FailureCode, str] = {
+    FailureCode.RATE_LIMITED: "⚠️ {detail}",
+    FailureCode.LIMITER_DOWN: (
+        "Can't process workouts right now — usage tracking is unavailable. "
+        "Please try again in a few minutes."
+    ),
+    FailureCode.LLM_BUSY: "I'm handling a lot of workouts right now. Send that again in a moment.",
+    FailureCode.CONFIG_ERROR: "Something's broken on my side. Please try again later.",
+    FailureCode.PARSE_TIMEOUT: "Parsing timed out. Please try again.",
+    FailureCode.PARSE_FAILED: (
+        "I couldn't turn that into a workout. Try describing the intervals "
+        "with distances and paces, e.g. '2km warmup, 10x400m @ 3:45, 2km cooldown'."
+    ),
+    FailureCode.TOKEN_UNREADABLE: (
+        "Your stored Garmin session is unreadable. Use /logout then /start to log in again."
+    ),
+    FailureCode.AUTH_EXPIRED: "Session expired and refresh failed. Use /logout then /start to re-login.",
+    FailureCode.UPLOAD_FAILED: "Failed to import workout into Garmin. Please try again.",
+}
 
 # Initialize Pyrogram Client
 app = Client("garmin_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -124,6 +148,110 @@ async def stats_handler(client: Client, message: Message):
     await message.reply(response)
 
 
+async def handle_username(message: Message, user_id: int, user_data: dict):
+    # The handshake entry has a 5-minute TTL while `state` lives in Mongo, so
+    # it can expire between /start and the username arriving. (Re)create it.
+    await session.set_username(user_id, message.text.strip())
+    # Update persistent state to await password
+    user_data["state"] = AWAIT_PASSWORD
+    await save_user(user_id, user_data)
+    await message.reply("Great! Now please enter your Garmin Connect password.")
+
+
+async def handle_password(message: Message, user_id: int, user_data: dict):
+    username = await session.get_username(user_id)
+    if not username:
+        await delete_user(user_id)
+        return await message.reply("Session expired or invalid. Please use /start to log in again.")
+
+    password = message.text.strip()
+    await message.reply("Logging in to Garmin Connect...")
+    try:
+        token = await login_to_garmin(username, password)
+        # Clean up raw credentials
+        await session.clear(user_id)
+        # Scrub the password from the chat history now that login succeeded.
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        # Store only token and authorized state
+        user_data.update({"garmin_auth": token, "state": AUTHORIZED})
+        await save_user(user_id, user_data)
+        await log_auth_event(user_id, "login_success")
+        return await message.reply(
+            "Successfully logged in! Send me any workout plan (text) to import into your Garmin Connect account."
+        )
+    except Exception as e:
+        await session.clear(user_id)
+        await delete_user(user_id)
+        # Class name only — never the exception body, which can echo credentials.
+        await log_auth_event(user_id, "login_failure", outcome="fail", detail=type(e).__name__)
+        print(
+            f"[login] user={user_id} method={os.getenv('GARMIN_LOGIN_METHOD', 'garth')} "
+            f"err={type(e).__name__}: {e}",
+            flush=True,
+        )
+        traceback.print_exc()
+        if isinstance(e, GarminInvalidCredentials):
+            return await message.reply(
+                "❌ Incorrect Garmin email or password.\n"
+                "Please use /start and try again."
+            )
+        if "429" in str(e):
+            return await message.reply(
+                "Garmin is temporarily rate limiting logins. Please wait a few minutes and try /start again."
+            )
+        return await message.reply(f"Login failed: {type(e).__name__}: {e}. Use /start to try again.")
+
+
+async def handle_workout(message: Message, user_id: int, user_data: dict):
+    # One workout at a time per user. Claim the slot synchronously — there is no
+    # await between the `in` check and the assignment — so two messages racing on
+    # separate dispatcher workers cannot both pass. A user already in flight has
+    # this message IGNORED (not queued); we just annotate their live notice.
+    if user_id in _active_notice:
+        notice = _active_notice[user_id]
+        if notice is not None:
+            try:
+                await notice.edit_text(_PROCESSING_TEXT + _BUSY_SUFFIX)
+            except Exception:
+                pass  # a repeat edit is "message not modified" — nothing to do
+        return
+    _active_notice[user_id] = None  # slot claimed; real notice stored below
+
+    async def on_accepted():
+        _active_notice[user_id] = await message.reply(_PROCESSING_TEXT)
+
+    async def notify(text: str):
+        await message.reply(text)
+
+    try:
+        outcome = await process_workout(
+            user_id, user_data, message.text, notify=notify, on_accepted=on_accepted
+        )
+        if isinstance(outcome, Success):
+            return await message.reply(
+                f"Workout successfully imported! 🎉\n"
+                f"{workout_url(outcome.workout_id)}\n\n"
+                f"⚡ Processed in {outcome.processing_ms:.0f}ms"
+            )
+        reply = _FAILURE_REPLIES[outcome.code].format(detail=outcome.detail)
+        return await message.reply(reply)
+    finally:
+        # Release the slot no matter how we leave — success, handled reply, or a
+        # crash. Without this a single unexpected exception would wedge the user
+        # into a permanent "busy" state with no workout ever processing.
+        _active_notice.pop(user_id, None)
+
+
+_STATE_HANDLERS = {
+    AWAIT_USERNAME: handle_username,
+    AWAIT_PASSWORD: handle_password,
+    AUTHORIZED: handle_workout,
+}
+
+
 # Text handler for login and workout messages
 @app.on_message(filters.text & filters.private)
 async def text_handler(client: Client, message: Message):
@@ -142,218 +270,10 @@ async def text_handler(client: Client, message: Message):
     if message.text.lower() == "ping":
         return await message.reply("pong")
 
-    state = user_data.get("state")
+    handler = _STATE_HANDLERS.get(user_data.get("state"))
+    if handler is not None:
+        await handler(message, user_id, user_data)
 
-    # Handle username entry
-    if state == AWAIT_USERNAME:
-        # The handshake entry has a 5-minute TTL while `state` lives in Mongo, so
-        # it can expire between /start and the username arriving. (Re)create it.
-        await session.set_username(user_id, message.text.strip())
-        # Update persistent state to await password
-        user_data["state"] = AWAIT_PASSWORD
-        await save_user(user_id, user_data)
-        await message.reply("Great! Now please enter your Garmin Connect password.")
-        return
-
-    # Handle password entry and attempt login
-    if state == AWAIT_PASSWORD:
-        username = await session.get_username(user_id)
-        if not username:
-            await delete_user(user_id)
-            return await message.reply("Session expired or invalid. Please use /start to log in again.")
-
-        password = message.text.strip()
-        await message.reply("Logging in to Garmin Connect...")
-        try:
-            token = await login_to_garmin(username, password)
-            # Clean up raw credentials
-            await session.clear(user_id)
-            # Scrub the password from the chat history now that login succeeded.
-            try:
-                await message.delete()
-            except Exception:
-                pass
-            # Store only token and authorized state
-            user_data.update({"garmin_auth": token, "state": AUTHORIZED})
-            await save_user(user_id, user_data)
-            await log_auth_event(user_id, "login_success")
-            return await message.reply(
-                "Successfully logged in! Send me any workout plan (text) to import into your Garmin Connect account."
-            )
-        except Exception as e:
-            await session.clear(user_id)
-            await delete_user(user_id)
-            # Class name only — never the exception body, which can echo credentials.
-            await log_auth_event(user_id, "login_failure", outcome="fail", detail=type(e).__name__)
-            print(
-                f"[login] user={user_id} method={os.getenv('GARMIN_LOGIN_METHOD', 'garth')} "
-                f"err={type(e).__name__}: {e}",
-                flush=True,
-            )
-            traceback.print_exc()
-            if isinstance(e, GarminInvalidCredentials):
-                return await message.reply(
-                    "❌ Incorrect Garmin email or password.\n"
-                    "Please use /start and try again."
-                )
-            if "429" in str(e):
-                return await message.reply(
-                    "Garmin is temporarily rate limiting logins. Please wait a few minutes and try /start again."
-                )
-            return await message.reply(f"Login failed: {type(e).__name__}: {e}. Use /start to try again.")
-
-    # Handle workout import for authorized users
-    if state == AUTHORIZED:
-        workout_data = message.text  # For file uploads, use filters.document and download
-
-        # One workout at a time per user. Claim the slot synchronously — there is no
-        # await between the `in` check and the assignment — so two messages racing on
-        # separate dispatcher workers cannot both pass. A user already in flight has
-        # this message IGNORED (not queued); we just annotate their live notice.
-        if user_id in _active_notice:
-            notice = _active_notice[user_id]
-            if notice is not None:
-                try:
-                    await notice.edit_text(_PROCESSING_TEXT + _BUSY_SUFFIX)
-                except Exception:
-                    pass  # a repeat edit is "message not modified" — nothing to do
-            return
-        _active_notice[user_id] = None  # slot claimed; real notice stored below
-
-        try:
-            # Consume quota BEFORE the billable work. We are limiting attempts, not
-            # successes — an LLM call that later fails at Garmin still costs money.
-            # The receipt lets us hand the quota back if the attempt was our fault.
-            try:
-                receipt = await consume(user_id)
-            except RateLimitExceeded as e:
-                return await message.reply(f"⚠️ {e}")
-            except RateLimiterUnavailable:
-                # Fail closed: without a working limiter we cannot bound spend.
-                return await message.reply(
-                    "Can't process workouts right now — usage tracking is unavailable. "
-                    "Please try again in a few minutes."
-                )
-
-            _active_notice[user_id] = await message.reply(_PROCESSING_TEXT)
-            start = time.monotonic()
-
-            try:
-                # Parse once. The retry below reuses this result rather than paying
-                # for a second LLM call.
-                workout_json = await parse_plan(workout_data)
-            except LLMBusy:
-                # Load shed, not a failure of this request — nothing was billed. Logged
-                # so the rate of shedding is visible; it's the signal to raise
-                # LLM_CONCURRENCY (or that the provider is degraded).
-                await refund(user_id, receipt)
-                await log_workout_request(user_id=user_id, prompt=workout_data, error="LLM busy")
-                return await message.reply(
-                    "I'm handling a lot of workouts right now. Send that again in a moment."
-                )
-            except WorkoutAIConfigError as e:
-                # Our misconfiguration (unknown provider, missing API key), raised
-                # strictly before any provider request — nothing was billed, and
-                # blaming the user's input for our env var would be a lie.
-                await refund(user_id, receipt)
-                print(f"[config] user={user_id} err={e}", flush=True)
-                await log_workout_request(user_id=user_id, prompt=workout_data, error=f"config: {e}")
-                return await message.reply(
-                    "Something's broken on my side. Please try again later."
-                )
-            # The invariant the handlers above and below draw: REFUND IFF NO PROVIDER
-            # REQUEST WAS ISSUED. Past this point a slot was held and the call went
-            # out, so the request was billed. Do NOT refund: quota tracks spend, and
-            # refunding here would make malformed input free to retry in a loop — the
-            # exact "failures cost nothing" hole that consuming up-front closes.
-            except asyncio.TimeoutError:
-                await log_workout_request(user_id=user_id, prompt=workout_data, error="LLM timeout")
-                return await message.reply("Parsing timed out. Please try again.")
-            except Exception as e:
-                print(f"[parse] user={user_id} err={type(e).__name__}: {e}", flush=True)
-                await log_workout_request(
-                    user_id=user_id, prompt=workout_data, error=f"{type(e).__name__}: {e}"
-                )
-                return await message.reply(
-                    "I couldn't turn that into a workout. Try describing the intervals "
-                    "with distances and paces, e.g. '2km warmup, 10x400m @ 3:45, 2km cooldown'."
-                )
-
-            try:
-                token = await get_garmin_token(user_data)
-            except Exception as e:
-                # InvalidTag (tampered/swapped ciphertext) or a key mismatch after a
-                # bad rotation. The stored credential is unusable; re-login is the fix.
-                print(f"[token] user={user_id} decrypt failed: {type(e).__name__}: {e}", flush=True)
-                await log_workout_request(user_id=user_id, prompt=workout_data, error="token decrypt failed")
-                return await message.reply(
-                    "Your stored Garmin session is unreadable. Use /logout then /start to log in again."
-                )
-            try:
-                try:
-                    workout_id, refreshed = await upload_parsed_workout(token, workout_json)
-                except GarminAuthExpired:
-                    # Token expired — refresh via OAuth1 (no SSO hit) and re-upload the
-                    # ALREADY-PARSED workout. Re-running the plan through the LLM here
-                    # would double the token spend for a single recorded request.
-                    #
-                    # refresh_token_async raises whatever curl_cffi/json/consumer lookup
-                    # throws, never GarminAuthExpired. Left unwrapped, a failed refresh
-                    # lands in the generic `except Exception` below and the user is told
-                    # to "try again" against a token that will never work. Retag it so
-                    # the auth handler owns the whole auth story.
-                    try:
-                        new_token = await refresh_token_async(token)
-                    except Exception as e:
-                        await log_auth_event(user_id, "token_refresh", outcome="fail", detail=type(e).__name__)
-                        raise GarminAuthExpired(f"refresh failed: {e}") from e
-                    user_data["garmin_auth"] = new_token
-                    await save_user(user_id, user_data)
-                    await log_auth_event(user_id, "token_refresh", detail="reactive-401")
-                    await message.reply("Session refreshed, retrying upload...")
-                    workout_id, refreshed = await upload_parsed_workout(new_token, workout_json)
-            except GarminAuthExpired:
-                await log_workout_request(user_id=user_id, prompt=workout_data, error="auth refresh failed")
-                return await message.reply(
-                    "Session expired and refresh failed. Use /logout then /start to re-login."
-                )
-            except Exception as e:
-                # Garmin rejected the upload. The LLM call was still billed, so the
-                # quota stays consumed — that spend was real.
-                print(f"[upload] user={user_id} err={type(e).__name__}: {e}", flush=True)
-                await log_workout_request(
-                    user_id=user_id,
-                    prompt=workout_data,
-                    workout_json=workout_json,
-                    error=f"{type(e).__name__}: {e}",
-                )
-                return await message.reply("Failed to import workout into Garmin. Please try again.")
-
-            if refreshed:
-                # garth refreshed OAuth2 inside the upload. Persist it or every
-                # subsequent upload re-pays this refresh round-trip forever.
-                user_data["garmin_auth"] = refreshed
-                await save_user(user_id, user_data)
-                await log_auth_event(user_id, "token_refresh", detail="garth-internal")
-
-            processing_time = (time.monotonic() - start) * 1000
-            await log_workout_request(
-                user_id=user_id,
-                prompt=workout_data,
-                workout_json=workout_json,
-                garmin_workout_id=workout_id,
-                processing_time_ms=processing_time,
-            )
-            return await message.reply(
-                f"Workout successfully imported! 🎉\n"
-                f"{workout_url(workout_id)}\n\n"
-                f"⚡ Processed in {processing_time:.0f}ms"
-            )
-        finally:
-            # Release the slot no matter how we leave — success, handled reply, or a
-            # crash. Without this a single unexpected exception would wedge the user
-            # into a permanent "busy" state with no workout ever processing.
-            _active_notice.pop(user_id, None)
 
 async def startup():
     """Initialize indexes and other startup tasks.
