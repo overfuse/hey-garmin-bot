@@ -11,6 +11,16 @@ class WorkoutAIConfigError(Exception):
     """
 
 
+class LLMQuotaExhausted(Exception):
+    """The provider account is out of credits (e.g. OpenAI `insufficient_quota`).
+
+    A request WAS issued, but the provider rejected it at the door — no tokens
+    were consumed, nothing was billed. Like WorkoutAIConfigError this is our
+    operational failure, not the user's input: callers must refund the user's
+    quota unit and must not blame the workout text.
+    """
+
+
 class LLMBusy(Exception):
     """Every LLM slot was occupied and none freed up within LLM_QUEUE_WAIT_S.
 

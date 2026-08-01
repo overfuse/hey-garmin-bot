@@ -271,4 +271,30 @@ C6 = Case(
 )
 
 
-CASES = [C1, C2, C3, C4, C5, C6]
+# --- Case 7: unitless km skeleton, fewer annotations than segments -----------
+# Real failure (2026-08): "6/2/6/4/6/2" is a 6-segment skeleton in km; the three
+# annotation lines cover the three DISTINCT distances. gpt-4.1-mini emitted one
+# step per annotation line (6+2+4 = 12 km) instead of one per skeleton segment
+# (26 km) — the annotation count won over the skeleton count. Differs from C1,
+# where the skeleton has explicit meter values and annotations map 1:1-ish.
+C7 = Case(
+    name="unitless-km-skeleton",
+    prompt=(
+        "6/2/6/4/6/2\n"
+        "6 км в темпе 4:50\n"
+        "2 км в темпе 4:00\n"
+        "4 км в темпе 4:15"
+    ),
+    expected="6 runs [6000@4:50,2000@4:00,6000@4:50,4000@4:15,6000@4:50,2000@4:00] = 26 km",
+    checks=[
+        ("6 runs, no repeat", lambda r: len(_intervals(r)) == 6
+            and all(e.get("type") == "run" for e in _intervals(r))),
+        ("distances (26 km)", lambda r: [e.get("distance") for e in _intervals(r)]
+            == [6000, 2000, 6000, 4000, 6000, 2000]),
+        ("paces", lambda r: [e.get("pace") for e in _intervals(r)]
+            == ["04:50", "04:00", "04:50", "04:15", "04:50", "04:00"]),
+    ],
+)
+
+
+CASES = [C1, C2, C3, C4, C5, C6, C7]

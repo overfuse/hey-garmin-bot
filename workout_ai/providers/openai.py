@@ -1,9 +1,9 @@
 import os
 
-from openai import AsyncOpenAI, OpenAIError
+from openai import AsyncOpenAI, OpenAIError, RateLimitError
 
 from ..config import LLM_TIMEOUT_S
-from ..errors import WorkoutAIConfigError
+from ..errors import LLMQuotaExhausted, WorkoutAIConfigError
 from ..models import Workout
 
 NAME = "openai"
@@ -23,17 +23,27 @@ async def plan(system_prompt: str, description: str, model: str) -> Workout:
         client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"), timeout=LLM_TIMEOUT_S)
     except OpenAIError as e:
         raise WorkoutAIConfigError(f"OpenAI client init failed: {e}") from e
-    completion = await client.chat.completions.parse(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": description},
-        ],
-        max_tokens=MAX_TOKENS,
-        seed=42,
-        temperature=0,
-        response_format=Workout,
-    )
+    try:
+        completion = await client.chat.completions.parse(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": description},
+            ],
+            max_tokens=MAX_TOKENS,
+            seed=42,
+            temperature=0,
+            response_format=Workout,
+        )
+    except RateLimitError as e:
+        # OpenAI reuses 429 for two very different things: a transient RPM/TPM
+        # limit (retryable, stays a RateLimitError) and an exhausted account
+        # balance (`insufficient_quota` / `credit_balance_exhausted`), which no
+        # retry will ever fix and which must not be blamed on the user's input.
+        markers = f"{e.code or ''} {e.type or ''}"
+        if any(m in markers for m in ("insufficient_quota", "credit", "billing")):
+            raise LLMQuotaExhausted(f"OpenAI account out of credits: {e.code}") from e
+        raise
     message = completion.choices[0].message
     if message.parsed is None:  # refusal or truncation
         raise ValueError(f"Model did not return a structured workout: {message.refusal}")

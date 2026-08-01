@@ -6,10 +6,11 @@ upload with a one-shot reactive token refresh, token persistence, and request
 logging. Telegram stays in bot.py — this module never sees a Message; it
 returns a typed Outcome and bot.py owns the copy.
 
-The invariant the quota handling draws: REFUND IFF NO PROVIDER REQUEST WAS
-ISSUED. LLMBusy and WorkoutAIConfigError are raised strictly before any
-provider call, so those refund. Past parse_plan a slot was held and the call
-went out, so the request was billed and the quota stays consumed — refunding
+The invariant the quota handling draws: REFUND IFF NOTHING WAS BILLED AND THE
+FAILURE IS OURS. LLMBusy and WorkoutAIConfigError are raised strictly before
+any provider call, and LLMQuotaExhausted means the provider bounced the request
+at the door (empty account balance — no tokens consumed); all three refund.
+Past those, a billable call went out, so the quota stays consumed — refunding
 would make malformed input free to retry in a loop, the exact "failures cost
 nothing" hole that consuming up-front closes.
 """
@@ -25,7 +26,7 @@ from audit import log_auth_event
 from garmin import GarminAuthExpired, refresh_token_async, upload_parsed_workout
 from rate_limiter import RateLimiterUnavailable, RateLimitExceeded, consume, refund
 from user import get_garmin_token, save_user
-from workout_ai import LLMBusy, WorkoutAIConfigError, parse_plan
+from workout_ai import LLMBusy, LLMQuotaExhausted, WorkoutAIConfigError, parse_plan
 from workout_log import log_workout_request
 
 
@@ -34,6 +35,7 @@ class FailureCode(Enum):
     LIMITER_DOWN = "limiter_down"        # Redis unreachable; fail closed, nothing processed
     LLM_BUSY = "llm_busy"                # load shed before any provider call; quota refunded
     CONFIG_ERROR = "config_error"        # our env/misconfig, pre-request; quota refunded
+    PROVIDER_QUOTA = "provider_quota"    # provider account out of credits; quota refunded
     PARSE_TIMEOUT = "parse_timeout"      # provider call exceeded its budget; billed
     PARSE_FAILED = "parse_failed"        # provider couldn't produce a workout; billed
     TOKEN_UNREADABLE = "token_unreadable"  # stored credential undecryptable; re-login required
@@ -119,6 +121,14 @@ async def process_workout(
         print(f"[config] user={user_id} err={e}", flush=True)
         await log_workout_request(user_id=user_id, prompt=plan_text, error=f"config: {e}")
         return Failure(FailureCode.CONFIG_ERROR)
+    except LLMQuotaExhausted as e:
+        # The provider account ran dry. The request was bounced unbilled, and
+        # the user's workout text had nothing to do with it — refund, and log
+        # loudly: every request will fail this way until the balance is topped up.
+        await refund(user_id, receipt)
+        print(f"[quota] user={user_id} provider credits exhausted: {e}", flush=True)
+        await log_workout_request(user_id=user_id, prompt=plan_text, error=f"provider quota: {e}")
+        return Failure(FailureCode.PROVIDER_QUOTA)
     except asyncio.TimeoutError:
         await log_workout_request(user_id=user_id, prompt=plan_text, error="LLM timeout")
         return Failure(FailureCode.PARSE_TIMEOUT)

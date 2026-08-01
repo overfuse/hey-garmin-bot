@@ -87,6 +87,11 @@ _FAILURE_REPLIES: dict[FailureCode, str] = {
     ),
     FailureCode.LLM_BUSY: "I'm handling a lot of workouts right now. Send that again in a moment.",
     FailureCode.CONFIG_ERROR: "Something's broken on my side. Please try again later.",
+    FailureCode.PROVIDER_QUOTA: (
+        "⛔ I've run out of AI credits, so I can't parse workouts right now. "
+        "Your workout text is fine — this attempt wasn't counted against your "
+        "quota. Please try again later."
+    ),
     FailureCode.PARSE_TIMEOUT: "Parsing timed out. Please try again.",
     FailureCode.PARSE_FAILED: (
         "I couldn't turn that into a workout. Try describing the intervals "

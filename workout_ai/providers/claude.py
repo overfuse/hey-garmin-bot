@@ -1,9 +1,9 @@
 import os
 
-from anthropic import AnthropicError, AsyncAnthropic
+from anthropic import AnthropicError, AsyncAnthropic, BadRequestError
 
 from ..config import LLM_TIMEOUT_S
-from ..errors import WorkoutAIConfigError
+from ..errors import LLMQuotaExhausted, WorkoutAIConfigError
 from ..models import Workout
 
 NAME = "claude"
@@ -30,14 +30,22 @@ async def plan(system_prompt: str, description: str, model: str) -> Workout:
         client = AsyncAnthropic(api_key=api_key, timeout=LLM_TIMEOUT_S)
     except AnthropicError as e:
         raise WorkoutAIConfigError(f"Anthropic client init failed: {e}") from e
-    message = await client.messages.parse(
-        model=model,
-        max_tokens=MAX_TOKENS,
-        thinking={"type": "enabled", "budget_tokens": THINKING_BUDGET},
-        system=system_prompt,
-        messages=[{"role": "user", "content": description}],
-        output_format=Workout,
-    )
+    try:
+        message = await client.messages.parse(
+            model=model,
+            max_tokens=MAX_TOKENS,
+            thinking={"type": "enabled", "budget_tokens": THINKING_BUDGET},
+            system=system_prompt,
+            messages=[{"role": "user", "content": description}],
+            output_format=Workout,
+        )
+    except BadRequestError as e:
+        # Anthropic has no dedicated error code for an empty balance — it comes
+        # back as a 400 invalid_request_error whose message says "credit balance
+        # is too low". Retag it so the caller doesn't blame the user's input.
+        if "credit balance" in str(e).lower():
+            raise LLMQuotaExhausted("Anthropic account out of credits") from e
+        raise
     if message.parsed_output is None:  # refusal or truncation
         raise ValueError(f"Model did not return a structured workout: {message.stop_reason}")
     return message.parsed_output
