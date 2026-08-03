@@ -7,13 +7,23 @@ from ..errors import LLMQuotaExhausted, WorkoutAIConfigError
 from ..models import Workout
 
 NAME = "openai"
-DEFAULT_MODEL = "gpt-4.1-mini"
+DEFAULT_MODEL = "gpt-5.6-luna"
 
-MAX_TOKENS = 2000  # must match evals/models.py — truncation is a production bug
+# Chat models (gpt-4 family): temperature=0 + a fixed seed give near-deterministic
+# output. Reasoning models (gpt-5*/o*, incl. gpt-5.6-luna) reject temperature/seed
+# and take reasoning_effort + max_completion_tokens instead; the cap covers hidden
+# reasoning tokens plus the visible JSON, so it needs generous headroom (billing is
+# by actual use, not the cap). evals/models.py imports all three constants —
+# truncation drift between eval and production is a production bug.
+MAX_TOKENS = 2000
+REASONING_MAX_TOKENS = 8000
+REASONING_EFFORT = "medium"
 
-# gpt-4.1-mini is a chat model: temperature=0 + a fixed seed give near-deterministic
-# output. (Reasoning models like o3/gpt-5 would need different params — they reject
-# temperature/seed — so they are not handled by this chat-model path.)
+_CHAT_PREFIXES = ("gpt-4",)
+
+
+def _is_chat_model(model: str) -> bool:
+    return model.startswith(_CHAT_PREFIXES)
 
 
 async def plan(system_prompt: str, description: str, model: str) -> Workout:
@@ -23,6 +33,12 @@ async def plan(system_prompt: str, description: str, model: str) -> Workout:
         client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"), timeout=LLM_TIMEOUT_S)
     except OpenAIError as e:
         raise WorkoutAIConfigError(f"OpenAI client init failed: {e}") from e
+    if _is_chat_model(model):
+        params = dict(max_tokens=MAX_TOKENS, seed=42, temperature=0)
+    else:
+        params = dict(
+            max_completion_tokens=REASONING_MAX_TOKENS, reasoning_effort=REASONING_EFFORT
+        )
     try:
         completion = await client.chat.completions.parse(
             model=model,
@@ -30,10 +46,8 @@ async def plan(system_prompt: str, description: str, model: str) -> Workout:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": description},
             ],
-            max_tokens=MAX_TOKENS,
-            seed=42,
-            temperature=0,
             response_format=Workout,
+            **params,
         )
     except RateLimitError as e:
         # OpenAI reuses 429 for two very different things: a transient RPM/TPM

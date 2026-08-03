@@ -1,8 +1,8 @@
 """Models under test and how to call each family.
 
 Providers differ in call shape, so there is one runner per family:
-  - openai chat      (gpt-4.1-mini): temperature/seed, max_tokens
-  - openai reasoning (o3/gpt-5):     reasoning_effort, max_completion_tokens, no temp/seed
+  - openai chat      (gpt-4.1-mini):      temperature/seed, max_tokens
+  - openai reasoning (o3/gpt-5/gpt-5.6):  reasoning_effort, max_completion_tokens, no temp/seed
   - anthropic        (haiku/sonnet): extended thinking, max_tokens
   - gemini (openai-compatible):      OpenAI SDK pointed at Google's endpoint
 
@@ -27,6 +27,8 @@ from workout_ai.providers import openai as _openai_provider
 # used 2000, so truncation between the two was a live bug the harness could not
 # see. Anything the eval hardcodes is something the eval stops measuring.
 CHAT_MAX_TOKENS = _openai_provider.MAX_TOKENS
+REASONING_MAX_TOKENS = _openai_provider.REASONING_MAX_TOKENS
+REASONING_EFFORT = _openai_provider.REASONING_EFFORT
 ANTHROPIC_MAX_TOKENS = _claude_provider.MAX_TOKENS
 ANTHROPIC_THINKING_BUDGET = _claude_provider.THINKING_BUDGET
 
@@ -65,8 +67,8 @@ async def run_openai_reasoning(system_prompt: str, description: str, model: str)
     completion = await client.chat.completions.parse(
         model=model,
         messages=_messages(system_prompt, description),
-        max_completion_tokens=8000,
-        reasoning_effort="medium",
+        max_completion_tokens=REASONING_MAX_TOKENS,
+        reasoning_effort=REASONING_EFFORT,
         response_format=Workout,
     )
     return _openai_dump(completion)
@@ -114,6 +116,7 @@ class ModelSpec:
 MODELS = [
     ModelSpec("openai/gpt-4.1-mini", "gpt-4.1-mini", run_openai_chat, "OPENAI_API_KEY"),
     ModelSpec("openai/gpt-5-mini", "gpt-5-mini", run_openai_reasoning, "OPENAI_API_KEY"),
+    ModelSpec("openai/gpt-5.6-luna", "gpt-5.6-luna", run_openai_reasoning, "OPENAI_API_KEY"),
     ModelSpec("openai/o3-mini", "o3-mini", run_openai_reasoning, "OPENAI_API_KEY"),
     ModelSpec("anthropic/haiku-4.5", "claude-haiku-4-5", run_anthropic, "ANTHROPIC_API_KEY"),
     ModelSpec("anthropic/sonnet-4.6", "claude-sonnet-4-6", run_anthropic, "ANTHROPIC_API_KEY"),

@@ -58,7 +58,7 @@ One runner per API family, because the call shape differs:
 | family | example models | params |
 |---|---|---|
 | openai chat | `gpt-4.1-mini` | `temperature=0`, `seed`, `max_tokens` |
-| openai reasoning | `gpt-5-mini`, `o3-mini` | `reasoning_effort`, `max_completion_tokens` (no temperature/seed) |
+| openai reasoning | `gpt-5.6-luna`, `gpt-5-mini`, `o3-mini` | `reasoning_effort`, `max_completion_tokens` (no temperature/seed) |
 | anthropic thinking | `claude-haiku-4-5`, `claude-sonnet-4-6` | extended thinking, `max_tokens` |
 | gemini (openai-compatible) | `gemini-2.5-flash` | OpenAI SDK pointed at Google's endpoint |
 
