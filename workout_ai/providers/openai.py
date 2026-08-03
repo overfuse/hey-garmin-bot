@@ -26,6 +26,12 @@ def _is_chat_model(model: str) -> bool:
     return model.startswith(_CHAT_PREFIXES)
 
 
+def wants_reasoning_prompt(model: str) -> bool:
+    """Reasoning models get the condensed SYSTEM_PROMPT_REASONING.md (the full
+    prompt's repetition and emphasis are band-aids for chat-model arithmetic)."""
+    return not _is_chat_model(model)
+
+
 async def plan(system_prompt: str, description: str, model: str) -> Workout:
     # Construction raises on a missing key — before any request is issued, which
     # is what lets the caller refund the quota unit for our misconfiguration.

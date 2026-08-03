@@ -22,7 +22,9 @@ from dotenv import load_dotenv
 from .cases import CASES
 from .models import MODELS
 
-PROMPT_PATH = Path(__file__).resolve().parent.parent / "SYSTEM_PROMPT.md"
+_ROOT = Path(__file__).resolve().parent.parent
+PROMPT_PATH = _ROOT / "SYSTEM_PROMPT.md"
+REASONING_PROMPT_PATH = _ROOT / "SYSTEM_PROMPT_REASONING.md"
 RESULTS_PATH = Path(__file__).resolve().parent / "last_results.json"
 CONCURRENCY = 6
 
@@ -127,10 +129,13 @@ async def main():
     if skipped:
         print("Skipped (no key):", ", ".join(f"{m.label}[{m.api_key_env}]" for m in skipped))
 
-    system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
+    prompts = {
+        False: PROMPT_PATH.read_text(encoding="utf-8"),
+        True: REASONING_PROMPT_PATH.read_text(encoding="utf-8"),
+    }
     sem = asyncio.Semaphore(CONCURRENCY)
     tasks = [
-        _run_one(sem, system_prompt, case, model, i)
+        _run_one(sem, prompts[model.reasoning_prompt], case, model, i)
         for case in CASES for model in available for i in range(runs)
     ]
     results = await asyncio.gather(*tasks)

@@ -111,13 +111,23 @@ class ModelSpec:
     model: str          # the API model id
     runner: Runner
     api_key_env: str    # only run if this env var is set
+    reasoning_prompt: bool = False  # use SYSTEM_PROMPT_REASONING.md, as prod would
+
+
+def _openai_spec(label: str, model: str, runner: Runner) -> ModelSpec:
+    # Prompt choice comes from the production selector, not restated here — the
+    # eval must send whatever production sends for this model.
+    return ModelSpec(label, model, runner, "OPENAI_API_KEY",
+                     reasoning_prompt=_openai_provider.wants_reasoning_prompt(model))
 
 
 MODELS = [
-    ModelSpec("openai/gpt-4.1-mini", "gpt-4.1-mini", run_openai_chat, "OPENAI_API_KEY"),
-    ModelSpec("openai/gpt-5-mini", "gpt-5-mini", run_openai_reasoning, "OPENAI_API_KEY"),
-    ModelSpec("openai/gpt-5.6-luna", "gpt-5.6-luna", run_openai_reasoning, "OPENAI_API_KEY"),
-    ModelSpec("openai/o3-mini", "o3-mini", run_openai_reasoning, "OPENAI_API_KEY"),
+    _openai_spec("openai/gpt-4.1-mini", "gpt-4.1-mini", run_openai_chat),
+    _openai_spec("openai/gpt-5-mini", "gpt-5-mini", run_openai_reasoning),
+    _openai_spec("openai/gpt-5.6-luna", "gpt-5.6-luna", run_openai_reasoning),
+    _openai_spec("openai/o3-mini", "o3-mini", run_openai_reasoning),
+    # The claude provider has no wants_reasoning_prompt yet, so prod sends the
+    # full prompt to haiku/sonnet — the eval does the same.
     ModelSpec("anthropic/haiku-4.5", "claude-haiku-4-5", run_anthropic, "ANTHROPIC_API_KEY"),
     ModelSpec("anthropic/sonnet-4.6", "claude-sonnet-4-6", run_anthropic, "ANTHROPIC_API_KEY"),
     # "other provider" example — skipped unless GEMINI_API_KEY is set.

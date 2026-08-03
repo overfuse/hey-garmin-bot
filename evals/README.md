@@ -64,8 +64,10 @@ One runner per API family, because the call shape differs:
 
 **Add a model**: append a `ModelSpec(label, model_id, runner, api_key_env)` to
 `MODELS`. It is skipped automatically unless `api_key_env` is set, so you can list
-providers you don't have keys for. The whole suite shares one `SYSTEM_PROMPT.md` —
-the same prompt production uses.
+providers you don't have keys for. The suite sends each model the same prompt
+production would: the full `SYSTEM_PROMPT.md` for chat models (and Claude), the
+condensed `SYSTEM_PROMPT_REASONING.md` for OpenAI reasoning models — selection
+comes from the production provider's `wants_reasoning_prompt`, not from the eval.
 
 ## Cases (`cases.py`)
 
