@@ -9,6 +9,7 @@ import sys
 import garth
 from dotenv import load_dotenv
 
+import prefs
 from garmin import login_to_garmin, upload_garmin_payload, workout_url
 from garmin_convert import convert
 from validate_garmin import validate_garmin_workout
@@ -22,10 +23,16 @@ def token_from_session(session_path: str = "~/.garth") -> str:
     return garth.client.dumps()
 
 
-def upload_plan(token: str, workout_plan: str) -> str:
+def parse_plan_with_prefs(workout_plan: str, user_prefs: dict[str, bool]) -> dict:
+    """Parse, then apply structure preferences — the same order workout_service
+    uses, so what the CLI prints is what the bot would upload."""
+    return prefs.apply(plan_to_json(workout_plan), user_prefs)
+
+
+def upload_plan(token: str, workout_plan: str, user_prefs: dict[str, bool] | None = None) -> str:
     """Parse + convert + upload in one shot. CLI-only: ungated and unmetered —
     the bot goes through workout_service so quota and the LLM gate apply."""
-    workout_json = plan_to_json(workout_plan)
+    workout_json = parse_plan_with_prefs(workout_plan, user_prefs or prefs.resolve(None))
     garmin_json = convert(workout_json)
     workout_id, _refreshed = upload_garmin_payload(token, garmin_json)
     return workout_id
@@ -59,7 +66,7 @@ def run_login(email: str | None, password: str | None, out_path: str | None) -> 
         print(token)
 
 
-def chat_loop() -> None:
+def chat_loop(user_prefs: dict[str, bool]) -> None:
     print("Chat mode. Type workout lines. Commands: /upload, /preview, /convert, /validate, /clear, /help, /quit")
     buffer: list[str] = []
     token: str | None = None
@@ -92,7 +99,7 @@ def chat_loop() -> None:
                     print("Nothing to preview. Type workout lines first.")
                     continue
                 try:
-                    wj = plan_to_json(text)
+                    wj = parse_plan_with_prefs(text, user_prefs)
                     import json as _json
                     print(_json.dumps(wj, indent=2))
                 except Exception as e:
@@ -104,7 +111,7 @@ def chat_loop() -> None:
                     print("Nothing to convert. Type workout lines first.")
                     continue
                 try:
-                    wj = plan_to_json(text)
+                    wj = parse_plan_with_prefs(text, user_prefs)
                     gj = convert(wj)
                     import json as _json
                     print(_json.dumps(gj, indent=2))
@@ -117,14 +124,16 @@ def chat_loop() -> None:
                     print("Nothing to validate. Type workout lines first.")
                     continue
                 try:
-                    wj = plan_to_json(text)
+                    wj = parse_plan_with_prefs(text, user_prefs)
                     gj = convert(wj)
                     import json as _json
                     print("Workout JSON:")
                     print(_json.dumps(wj, indent=2, ensure_ascii=False))
                     print("Garmin JSON:")
                     print(_json.dumps(gj, indent=2, ensure_ascii=False))
-                    errs, warns = validate_garmin_workout(gj)
+                    errs, warns = validate_garmin_workout(
+                        gj, wu_cd_lap_press=user_prefs["wu_cd_lap_press"]
+                    )
                     if errs:
                         print("Errors:")
                         for e in errs:
@@ -146,7 +155,7 @@ def chat_loop() -> None:
                 try:
                     if token is None:
                         token = token_from_session(session_path)
-                    workout_id = upload_plan(token, text)
+                    workout_id = upload_plan(token, text, user_prefs)
                     print(f"Uploaded: {workout_url(workout_id)}")
                     buffer.clear()
                 except Exception as e:
@@ -186,6 +195,16 @@ def main() -> None:
         help="Start interactive chat-like mode.",
     )
     parser.add_argument(
+        "--no-lap-press",
+        action="store_true",
+        help=(
+            "Keep the warm-up/cool-down distances from the plan instead of ending "
+            "those sections on the lap press. Mirrors the 'End warmup/cooldown on "
+            "lap press' setting switched off; the CLI otherwise runs on the "
+            "shipped defaults."
+        ),
+    )
+    parser.add_argument(
         "--login",
         action="store_true",
         help="Test SSO login via login_to_garmin and print the token.",
@@ -200,12 +219,16 @@ def main() -> None:
 
     session_path = os.getenv("GARTH_SESSION_PATH", "~/.garth")
 
+    # The CLI has no user record, so it runs on the shipped defaults with the
+    # one toggle that changes the shape of the output exposed as a flag.
+    user_prefs = prefs.resolve({"wu_cd_lap_press": not args.no_lap_press})
+
     if args.login:
         run_login(args.email, args.password, args.out)
         return
 
     if args.chat:
-        chat_loop()
+        chat_loop(user_prefs)
         return
 
     plan_text = read_plan_from_args_or_stdin(args.file)
@@ -215,9 +238,11 @@ def main() -> None:
 
     try:
         # Pre-validate before uploading
-        wj = plan_to_json(plan_text)
+        wj = parse_plan_with_prefs(plan_text, user_prefs)
         gj = convert(wj)
-        errs, warns = validate_garmin_workout(gj)
+        errs, warns = validate_garmin_workout(
+            gj, wu_cd_lap_press=user_prefs["wu_cd_lap_press"]
+        )
         if args.print_garmin_json:
             import json as _json
             print(_json.dumps(gj, indent=2))

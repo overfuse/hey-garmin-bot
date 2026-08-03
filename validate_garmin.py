@@ -13,7 +13,13 @@ def _is_number(value: Any) -> bool:
         return False
 
 
-def _validate_step(step: Dict[str, Any], path: str, errors: List[str]) -> None:
+def _validate_step(
+    step: Dict[str, Any],
+    path: str,
+    errors: List[str],
+    *,
+    wu_cd_lap_press: bool = True,
+) -> None:
     if step.get("type") not in ("ExecutableStepDTO", "RepeatGroupDTO"):
         errors.append(f"{path}: unknown step 'type'={step.get('type')}")
         return
@@ -32,14 +38,35 @@ def _validate_step(step: Dict[str, Any], path: str, errors: List[str]) -> None:
             errors.append(f"{path}: workoutSteps must be a non-empty list for RepeatGroupDTO")
             return
         for idx, child in enumerate(children, start=1):
-            _validate_step(child, f"{path}.workoutSteps[{idx}]", errors)
+            _validate_step(
+                child,
+                f"{path}.workoutSteps[{idx}]",
+                errors,
+                wu_cd_lap_press=wu_cd_lap_press,
+            )
         return
 
     # Executable steps
     end_condition = (step.get("endCondition") or {}).get("conditionTypeKey")
     if step_type in ("warmup", "cooldown"):
-        if end_condition != "lap.button":
-            errors.append(f"{path}: {step_type} must end by lap.button")
+        # Which end condition is correct here is a per-user preference, not a
+        # constant: prefs.wu_cd_lap_press strips the distance so these sections
+        # end on the lap press, and with the toggle off the plan's own distance
+        # survives to the watch. Hardcoding lap.button rejected every plan that
+        # said "2 km warmup" — exactly what SYSTEM_PROMPT.md tells the model to
+        # emit. In the toggle-off arm lap.button is still accepted: a plan that
+        # never stated a distance has none to keep.
+        if wu_cd_lap_press:
+            if end_condition != "lap.button":
+                errors.append(
+                    f"{path}: {step_type} must end by lap.button when "
+                    f"wu_cd_lap_press is on"
+                )
+        elif end_condition == "distance":
+            if not _is_number(step.get("endConditionValue")):
+                errors.append(f"{path}: {step_type} must have numeric endConditionValue")
+        elif end_condition != "lap.button":
+            errors.append(f"{path}: {step_type} must end by distance or lap.button")
     elif step_type == "interval":
         if end_condition != "distance":
             errors.append(f"{path}: interval must end by distance")
@@ -61,8 +88,17 @@ def _validate_step(step: Dict[str, Any], path: str, errors: List[str]) -> None:
             errors.append(f"{path}: rest must have numeric endConditionValue")
 
 
-def validate_garmin_workout(payload: Dict[str, Any]) -> Tuple[List[str], List[str]]:
-    """Return (errors, warnings) for a Garmin workout payload."""
+def validate_garmin_workout(
+    payload: Dict[str, Any],
+    *,
+    wu_cd_lap_press: bool = True,
+) -> Tuple[List[str], List[str]]:
+    """Return (errors, warnings) for a Garmin workout payload.
+
+    `wu_cd_lap_press` mirrors the preference of the same name (prefs.DEFAULTS):
+    pass the resolved value for the user whose payload this is, so the check
+    matches the transform that produced it.
+    """
     errors: List[str] = []
     warnings: List[str] = []
 
@@ -89,7 +125,12 @@ def validate_garmin_workout(payload: Dict[str, Any]) -> Tuple[List[str], List[st
         if orders and any(orders[j] >= orders[j+1] for j in range(len(orders)-1)):
             warnings.append(f"workoutSegments[{i}]: stepOrder not strictly increasing")
         for j, s in enumerate(steps, start=1):
-            _validate_step(s, f"workoutSegments[{i}].workoutSteps[{j}]", errors)
+            _validate_step(
+                s,
+                f"workoutSegments[{i}].workoutSteps[{j}]",
+                errors,
+                wu_cd_lap_press=wu_cd_lap_press,
+            )
 
     return (errors, warnings)
 

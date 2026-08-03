@@ -4,6 +4,7 @@ Rules:
 
 - Units → meters: 1 mi = 1609.34 m; 1 yd = 0.9144 m; 1 lap = 400 m unless another lap length is given. Round derived distances to the nearest 10 m; preserve integers provided directly.
 - Paces → min/km formatted mm:ss (convert from min/mi if needed). A named pace with no inferable number (e.g. "5k pace") → omit pace.
+- Pace ceiling («из 4 мин», «чуть из 4 мин», «выбежать из 3:30», "sub-4:00", "just under 4:00", "faster than 4:00"): the stated value is the SLOWEST acceptable pace, not the target — emit it minus 5 s (4:00 → 03:55; 3:30 → 03:25) so the stated value sits at the slow end of the target window. Only when the word governs a pace/time value; «из» inside an exercise name («выпрыгивания из глубокого приседа») is prose.
 - A time-based run with a known pace (its own or a global one) → convert time to distance, nearest 10 m. No pace available → skip that step.
 - Jog/easy/float (incl. "свободно", "легко", "трусцой") = recovery step without pace. Rest/stop/stand = passive rest in seconds (1:30 → 90). A distance-based "rest" done as a jog/walk is a recovery.
 - Slashed on/off pair with an easy marker (e.g. 400/200 easy): the marked leg is the recovery; if the marker covers the whole pair, first leg = run, second = recovery. Legs with their own fast/slow paces (inline or on annotation lines) are BOTH runs at those paces — only a paceless leg becomes a recovery. A slashed list whose segments all carry paces stays all-run.

@@ -297,4 +297,45 @@ C7 = Case(
 )
 
 
-CASES = [C1, C2, C3, C4, C5, C6, C7]
+# --- Case 8: pace ceiling + long rep count with standing rest ----------------
+# Real workout (2026-08). Three distinct things to get right: "чуть из 4 мин" is
+# a CEILING, so the emitted pace must be 03:55 and not 03:59/04:00 (the ±5 s
+# window in garmin_convert then closes exactly at 4:00 instead of straddling
+# it); the 400 m rep is a paced RUN, not a recovery, even though the only other
+# step in the group is rest; and "постоять просто" is passive rest in seconds,
+# not a jog. The chatter line exists to be ignored.
+def _c8_steps(r):
+    for g in _repeats(r):
+        if g.get("repeat") == 25:
+            return g.get("steps", [])
+    return []
+
+
+C8 = Case(
+    name="pace-ceiling-25x400",
+    prompt=(
+        "2 км разминка\n"
+        "25 раз по 400м в темпе чуть из 4 мин\n"
+        "Отдых между 40-45 сек постоять просто\n"
+        "Тренировка скучная, но она нужна\n"
+        "2 км заминка"
+    ),
+    expected="wu/cd 2000; 25x[400 run @03:55, rest 40-45s]",
+    checks=[
+        ("warm/cool", lambda r: _warmup(r) == 2000 and _cooldown(r) == 2000),
+        ("repeat == 25", lambda r: any(g.get("repeat") == 25 for g in _repeats(r))),
+        ("400 m is a run, not recovery", lambda r: any(
+            s.get("type") == "run" and s.get("distance") == 400 for s in _c8_steps(r))),
+        ("pace ceiling → 03:55", lambda r: any(
+            s.get("distance") == 400 and s.get("pace") == "03:55" for s in _c8_steps(r))),
+        # "40-45 сек" is a genuine range and models land anywhere inside it
+        # (40, 42 and 45 all seen). Pinning one value would measure the
+        # mixture ratio, not correctness.
+        ("standing rest 40-45 s inside", lambda r: any(
+            s.get("type") == "rest" and isinstance(s.get("rest"), int)
+            and 40 <= s["rest"] <= 45 for s in _c8_steps(r))),
+    ],
+)
+
+
+CASES = [C1, C2, C3, C4, C5, C6, C7, C8]
