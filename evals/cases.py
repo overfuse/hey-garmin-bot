@@ -338,4 +338,44 @@ C8 = Case(
 )
 
 
-CASES = [C1, C2, C3, C4, C5, C6, C7, C8]
+# --- Case 9: rep-counted pair w/ single pace + time-based walk/jog recovery --
+# Real workout (2026-09). Two flaky failure modes on luna: (a) "3 раза 200/200 в
+# темпе 4:00" — the single pace was bound to BOTH legs (run@4:00 + run@4:00)
+# instead of the work leg only (run@4:00 + pace-less recovery); (b) "5 мин
+# шаг/трусца" — a time-based walk/jog with no pace was read as a time-based run
+# and dropped (rule "no pace → skip that step") instead of becoming rest 300.
+def _c9_pair_groups(r):
+    return [g for g in _repeats(r) if g.get("repeat") == 3
+            and len(g["steps"]) == 2
+            and g["steps"][0].get("distance") == 200
+            and g["steps"][1].get("distance") == 200]
+
+
+C9 = Case(
+    name="rep-pair-single-pace+walk-jog",
+    prompt=(
+        "3 км разминка с прогрессией\n"
+        "3 раза 200/200 в темпе 4:00\n"
+        "6 км в темпе 4:30-4:35\n"
+        "5 мин шаг/трусца\n"
+        "3 раза 200/200 в темпе 4:00\n"
+        "1 км заминка"
+    ),
+    expected="wu 3000, cd 1000; two 3x[200@4:00, recovery200]; 6000@4:30; rest 300 between the two sets",
+    checks=[
+        ("warm/cool", lambda r: _warmup(r) == 3000 and _cooldown(r) == 1000),
+        ("two 3x200/200 groups", lambda r: len(_c9_pair_groups(r)) == 2),
+        ("work leg run@4:00, recovery leg pace-less", lambda r: len(_c9_pair_groups(r)) > 0
+            and all(g["steps"][0].get("type") == "run" and g["steps"][0].get("pace") == "04:00"
+                    and g["steps"][1].get("type") == "recovery" and not g["steps"][1].get("pace")
+                    for g in _c9_pair_groups(r))),
+        ("6 km @ 4:30 kept", lambda r: any(
+            e.get("type") == "run" and e.get("distance") == 6000
+            and e.get("pace") in ("04:30", "04:35") for e in _intervals(r))),
+        ("5 min walk/jog kept as rest 300", lambda r: any(
+            e.get("type") == "rest" and e.get("rest") == 300 for e in _flat_steps(r))),
+    ],
+)
+
+
+CASES = [C1, C2, C3, C4, C5, C6, C7, C8, C9]
