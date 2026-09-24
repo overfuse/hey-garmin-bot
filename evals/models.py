@@ -125,6 +125,7 @@ MODELS = [
     _openai_spec("openai/gpt-4.1-mini", "gpt-4.1-mini", run_openai_chat),
     _openai_spec("openai/gpt-5-mini", "gpt-5-mini", run_openai_reasoning),
     _openai_spec("openai/gpt-5.6-luna", "gpt-5.6-luna", run_openai_reasoning),
+    _openai_spec("openai/gpt-6-luna", "gpt-6-luna", run_openai_reasoning),
     _openai_spec("openai/o3-mini", "o3-mini", run_openai_reasoning),
     # The claude provider has no wants_reasoning_prompt yet, so prod sends the
     # full prompt to haiku/sonnet — the eval does the same.

@@ -1,7 +1,7 @@
 # hey-garmin-bot
 
 Telegram bot that turns free-text workout descriptions into structured Garmin
-workouts via an LLM (`workout_ai/`, prod default: openai/gpt-5.6-luna).
+workouts via an LLM (`workout_ai/`, prod default: openai/gpt-6-luna).
 
 ## Evals
 

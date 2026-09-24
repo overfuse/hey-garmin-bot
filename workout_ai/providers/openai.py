@@ -7,10 +7,10 @@ from ..errors import LLMQuotaExhausted, WorkoutAIConfigError
 from ..models import Workout
 
 NAME = "openai"
-DEFAULT_MODEL = "gpt-5.6-luna"
+DEFAULT_MODEL = "gpt-6-luna"
 
 # Chat models (gpt-4 family): temperature=0 + a fixed seed give near-deterministic
-# output. Reasoning models (gpt-5*/o*, incl. gpt-5.6-luna) reject temperature/seed
+# output. Reasoning models (gpt-5*/gpt-6*/o*, incl. gpt-6-luna) reject temperature/seed
 # and take reasoning_effort + max_completion_tokens instead; the cap covers hidden
 # reasoning tokens plus the visible JSON, so it needs generous headroom (billing is
 # by actual use, not the cap). evals/models.py imports all three constants —
