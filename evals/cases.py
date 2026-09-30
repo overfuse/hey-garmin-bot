@@ -56,6 +56,25 @@ def _flat_steps(r):
     return out
 
 
+def _unrolled(r):
+    """Every step in execution order, repeat groups unrolled `repeat` times."""
+    out = []
+    for e in _intervals(r):
+        if e.get("type") == "repeat":
+            for _ in range(e.get("repeat") or 0):
+                out.extend(e.get("steps", []))
+        else:
+            out.append(e)
+    return out
+
+
+def _pair_groups(r, n, a, b):
+    """Repeat groups of exactly n × [a m run, b m paceless recovery]."""
+    return [g for g in _repeats(r) if g.get("repeat") == n and len(g["steps"]) == 2
+            and g["steps"][0].get("type") == "run" and g["steps"][0].get("distance") == a
+            and g["steps"][1].get("type") == "recovery" and g["steps"][1].get("distance") == b]
+
+
 # --- Case 1: layered slashes + pace-annotation lines -------------------------
 # "4000/500/2000/500/4000" is the skeleton; the following lines annotate paces.
 # Correct = 5 flat run segments, no repeat, no duplication.
@@ -115,9 +134,12 @@ C2 = Case(
 )
 
 
-# --- Case 3: distance-budgeted alternation + fast/slow paces (two blocks) ----
-def _seg200(r):
-    return [s for s in _flat_steps(r) if s.get("type") == "run" and s.get("distance") == 200]
+# --- Case 3: distance-budgeted pair + fast/slow paces (two blocks) ----------
+# "1 км в режиме 200/200" = 1000 m of 200/200 pairs. Every slashed pair is run +
+# paceless recovery, so the slow pace (5:00) is dropped; 1000 is 2.5 pairs →
+# repeat 2 × [200 run @ 3:30, 200 recovery] + one trailing 200 run @ 3:30.
+def _c3_runs200(r):
+    return [s for s in _unrolled(r) if s.get("type") == "run" and s.get("distance") == 200]
 
 
 C3 = Case(
@@ -134,15 +156,18 @@ C3 = Case(
         "Медленные по 5:00\n"
         "2 км заминка"
     ),
-    expected="wu/cd 2000; two 3000@4:00; two 1km blocks = 5x200 (3 fast@3:30 + 2 slow@5:00)",
+    expected="wu/cd 2000; two 3000@4:00; two 1km blocks = 2x[200@3:30, recovery200] + 200@3:30",
     checks=[
         ("warm/cool", lambda r: _warmup(r) == 2000 and _cooldown(r) == 2000),
         ("two 3000@4:00", lambda r: sum(
             1 for e in _intervals(r)
             if e.get("type") == "run" and e.get("distance") == 3000 and e.get("pace") == "04:00") == 2),
-        ("budget: 10x200 (=1000m/block)", lambda r: len(_seg200(r)) == 10),
-        ("slow pace kept (3:30/5:00)", lambda r: len(_seg200(r)) > 0
-            and all(s.get("pace") in ("03:30", "05:00") for s in _seg200(r))),
+        ("budget: 2×1000 m of 200s", lambda r: sum(
+            s.get("distance") or 0 for s in _unrolled(r) if s.get("distance") == 200) == 2000),
+        ("pairs: 2x[run, recovery] ×2", lambda r: len(_pair_groups(r, 2, 200, 200)) == 2),
+        ("runs @3:30, no 5:00", lambda r: len(_c3_runs200(r)) == 6
+            and all(s.get("pace") == "03:30" for s in _c3_runs200(r))
+            and not any(s.get("pace") == "05:00" for s in _unrolled(r))),
     ],
 )
 
@@ -378,4 +403,30 @@ C9 = Case(
 )
 
 
-CASES = [C1, C2, C3, C4, C5, C6, C7, C8, C9]
+# --- Case 10: unitless km skeleton whose annotation is a distance budget -----
+# Real workout (2026-09). "2/3/2" is a km skeleton; "2 км в режиме 200/200" is a
+# budget annotation that must expand EACH 2 km segment in place into repeat
+# 5 × [200 run, 200 recovery] (2000 ÷ 400). Failure modes seen on luna: the
+# second 2 left as a single 2000 m step (or dropped with the 3 km), wrong
+# segment counts, and the first leg keeping the 2000 m block total.
+C10 = Case(
+    name="km-skeleton+budget",
+    prompt=(
+        "3 км разминка/заминка\n\n"
+        "2/3/2\n"
+        "2 км в режиме 200/200 свободные ускорения\n"
+        "3 км в темпе 4:30"
+    ),
+    expected="wu/cd 3000; 5x[run200, recovery200] → 3000@4:30 → 5x[run200, recovery200]",
+    checks=[
+        ("warm/cool", lambda r: _warmup(r) == 3000 and _cooldown(r) == 3000),
+        ("3000 @ 4:30 kept", lambda r: any(
+            e.get("type") == "run" and e.get("distance") == 3000 and e.get("pace") == "04:30"
+            for e in _intervals(r))),
+        ("two 5x[run200, recovery200]", lambda r: len(_pair_groups(r, 5, 200, 200)) == 2),
+        ("order: 5 pairs, 3000, 5 pairs", lambda r: [s.get("distance") for s in _unrolled(r)]
+            == [200] * 10 + [3000] + [200] * 10),
+    ],
+)
+
+CASES = [C1, C2, C3, C4, C5, C6, C7, C8, C9, C10]
