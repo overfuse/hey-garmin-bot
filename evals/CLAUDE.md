@@ -7,8 +7,8 @@ the numbers*.
 ## Commands
 
 ```bash
-uv run python -m evals.run luna              # filter by model label substring
-EVAL_RUNS=2 uv run python -m evals.run luna  # N runs per case
+uv run python -m evals.run haiku-5.5         # filter by model label substring
+EVAL_RUNS=2 uv run python -m evals.run haiku-5.5  # N runs per case
 ```
 
 There is no case filter — every batch runs all cases (see backlog #1).

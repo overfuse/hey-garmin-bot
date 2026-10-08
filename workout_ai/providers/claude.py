@@ -7,7 +7,7 @@ from ..errors import LLMQuotaExhausted, WorkoutAIConfigError
 from ..models import Workout
 
 NAME = "claude"
-DEFAULT_MODEL = "claude-haiku-4-5"
+DEFAULT_MODEL = "claude-haiku-5-5"
 
 # Haiku uses extended thinking so it reliably handles arithmetic-heavy budgeting
 # (e.g. "1 km in 200/200 mode" -> exactly five 200 m segments); without it Haiku
@@ -17,6 +17,16 @@ DEFAULT_MODEL = "claude-haiku-4-5"
 # used, not the cap, so the headroom is free insurance.
 THINKING_BUDGET = 2000
 MAX_TOKENS = 8000
+
+# 4.x models take a fixed thinking budget; newer ones (haiku-5.5+) reject
+# "enabled" with a 400 and only accept adaptive thinking.
+_FIXED_BUDGET_PREFIXES = ("claude-haiku-4", "claude-sonnet-4")
+
+
+def thinking_config(model: str) -> dict:
+    if model.startswith(_FIXED_BUDGET_PREFIXES):
+        return {"type": "enabled", "budget_tokens": THINKING_BUDGET}
+    return {"type": "adaptive"}
 
 
 async def plan(system_prompt: str, description: str, model: str) -> Workout:
@@ -34,7 +44,7 @@ async def plan(system_prompt: str, description: str, model: str) -> Workout:
         message = await client.messages.parse(
             model=model,
             max_tokens=MAX_TOKENS,
-            thinking={"type": "enabled", "budget_tokens": THINKING_BUDGET},
+            thinking=thinking_config(model),
             system=system_prompt,
             messages=[{"role": "user", "content": description}],
             output_format=Workout,

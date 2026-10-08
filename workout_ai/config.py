@@ -14,9 +14,9 @@ load_dotenv()
 
 # Provider selection. Both API keys can live in .env; only the selected
 # provider's key is needed at runtime.
-#   WORKOUT_AI_PROVIDER  "claude" | "openai"   (default: openai)
+#   WORKOUT_AI_PROVIDER  "claude" | "openai"   (default: claude)
 #   WORKOUT_AI_MODEL     optional override of the provider's default model
-PROVIDER = os.environ.get("WORKOUT_AI_PROVIDER", "openai").lower()
+PROVIDER = os.environ.get("WORKOUT_AI_PROVIDER", "claude").lower()
 MODEL = os.environ.get("WORKOUT_AI_MODEL")
 
 LLM_CONCURRENCY = int(os.getenv("LLM_CONCURRENCY", "4"))

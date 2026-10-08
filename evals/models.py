@@ -3,7 +3,7 @@
 Providers differ in call shape, so there is one runner per family:
   - openai chat      (gpt-4.1-mini):      temperature/seed, max_tokens
   - openai reasoning (o3/gpt-5/gpt-5.6):  reasoning_effort, max_completion_tokens, no temp/seed
-  - anthropic        (haiku/sonnet): extended thinking, max_tokens
+  - anthropic        (haiku/sonnet): extended thinking (adaptive on 5.x), max_tokens
   - gemini (openai-compatible):      OpenAI SDK pointed at Google's endpoint
 
 Each runner returns the parsed result as a dict (exclude_none), or raises on a
@@ -30,7 +30,6 @@ CHAT_MAX_TOKENS = _openai_provider.MAX_TOKENS
 REASONING_MAX_TOKENS = _openai_provider.REASONING_MAX_TOKENS
 REASONING_EFFORT = _openai_provider.REASONING_EFFORT
 ANTHROPIC_MAX_TOKENS = _claude_provider.MAX_TOKENS
-ANTHROPIC_THINKING_BUDGET = _claude_provider.THINKING_BUDGET
 
 Runner = Callable[[str, str, str], Awaitable[dict]]
 
@@ -79,7 +78,7 @@ async def run_anthropic(system_prompt: str, description: str, model: str) -> dic
     message = await client.messages.parse(
         model=model,
         max_tokens=ANTHROPIC_MAX_TOKENS,
-        thinking={"type": "enabled", "budget_tokens": ANTHROPIC_THINKING_BUDGET},
+        thinking=_claude_provider.thinking_config(model),
         system=system_prompt,
         messages=[{"role": "user", "content": description}],
         output_format=Workout,
@@ -130,6 +129,7 @@ MODELS = [
     # The claude provider has no wants_reasoning_prompt yet, so prod sends the
     # full prompt to haiku/sonnet — the eval does the same.
     ModelSpec("anthropic/haiku-4.5", "claude-haiku-4-5", run_anthropic, "ANTHROPIC_API_KEY"),
+    ModelSpec("anthropic/haiku-5.5", "claude-haiku-5-5", run_anthropic, "ANTHROPIC_API_KEY"),
     ModelSpec("anthropic/sonnet-4.6", "claude-sonnet-4-6", run_anthropic, "ANTHROPIC_API_KEY"),
     # "other provider" example — skipped unless GEMINI_API_KEY is set.
     ModelSpec("google/gemini-2.5-flash", "gemini-2.5-flash", run_gemini, "GEMINI_API_KEY"),
