@@ -429,4 +429,25 @@ C10 = Case(
     ],
 )
 
-CASES = [C1, C2, C3, C4, C5, C6, C7, C8, C9, C10]
+
+# --- Case 11: break then rep-counted pair after a km warmup ------------------
+# Real workout (2026-10). Rare luna flake (1/16): the work leg of "5 раз 200/200"
+# took the preceding "2 км" and became run 2000 + recovery 200.
+C11 = Case(
+    name="break+pair-after-2km",
+    prompt=(
+        "2 км легко\n"
+        "30 выпадов вперед с дополнительным прыжком вверх на опорной ноге\n"
+        "5 раз 200/200 ( тут свободно)"
+    ),
+    expected="wu 2000; break (lunges); 5x[run200, recovery200], no paces",
+    checks=[
+        ("warmup 2000", lambda r: _warmup(r) == 2000),
+        ("lunges as break before the set", lambda r: [e.get("type") for e in _intervals(r)]
+            == ["break", "repeat"]),
+        ("5x[run200, recovery200]", lambda r: len(_pair_groups(r, 5, 200, 200)) == 1),
+        ("no paces (свободно)", lambda r: not any(s.get("pace") for s in _flat_steps(r))),
+    ],
+)
+
+CASES = [C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11]
