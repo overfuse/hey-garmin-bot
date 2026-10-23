@@ -57,6 +57,17 @@ def test_warmup_without_distance_still_falls_back_to_lap_button():
     assert wu["targetType"]["workoutTargetTypeKey"] == "no.target"
 
 
+def test_warmup_duration_ends_on_time():
+    """"10 мин разминка" used to reach the watch as a lap-button warmup: the
+    schema had nowhere to put a time, so the 10 minutes were dropped."""
+    payload = convert({"warmup": {"duration": 600}, "intervals": [], "cooldown": {"duration": 600}})
+    for key in ("warmup", "cooldown"):
+        step = _by_type(payload, key)[0]
+        assert step["endCondition"]["conditionTypeKey"] == "time"
+        assert step["endConditionValue"] == 600.0
+        assert step["durationType"]["workoutStepDurationTypeKey"] == "time"
+
+
 # --- structure ---------------------------------------------------------------
 
 def test_paced_run_becomes_an_interval_with_a_pace_window():
@@ -161,6 +172,40 @@ def test_unnamed_workout_gets_a_default():
     assert convert({"intervals": []})["workoutName"] == "Converted Workout"
 
 
+def test_timed_run_ends_on_time_not_a_derived_distance():
+    """Regression: "15 мин в темпе 4:28" became a 3360 m step — distance worked
+    out from a pace the athlete may not hold on the day."""
+    payload = convert({"intervals": [{"type": "run", "duration": 900, "pace": "04:28"}]})
+    step = _steps(payload)[0]
+    assert step["stepType"]["stepTypeKey"] == "interval"
+    assert step["endCondition"]["conditionTypeKey"] == "time"
+    assert step["endConditionValue"] == 900.0
+    assert step["durationValue"] == 900
+    assert step["preferredEndConditionUnit"] is None
+
+
+def test_timed_recovery_ends_on_time():
+    payload = convert({"intervals": [{"type": "recovery", "duration": 300}]})
+    step = _steps(payload)[0]
+    assert step["stepType"]["stepTypeKey"] == "recovery"
+    assert step["endCondition"]["conditionTypeKey"] == "time"
+    assert step["endConditionValue"] == 300.0
+
+
+def test_duration_wins_when_a_step_carries_both():
+    payload = convert({"intervals": [{"type": "run", "distance": 3360, "duration": 900, "pace": "04:28"}]})
+    assert _steps(payload)[0]["endCondition"]["conditionTypeKey"] == "time"
+
+
+def test_pace_range_reaches_the_watch_verbatim():
+    """"4:25-4:30" was collapsed to 04:28 ±5 s = 4:23-4:33 on the watch."""
+    payload = convert({"intervals": [
+        {"type": "run", "duration": 900, "pace": "04:25", "pace_slow": "04:30"}]})
+    step = _steps(payload)[0]
+    assert step["targetValueOne"] == pytest.approx(1000 / 265)
+    assert step["targetValueTwo"] == pytest.approx(1000 / 270)
+
+
 # --- pace maths --------------------------------------------------------------
 
 def test_pace_parsing_and_window():
@@ -189,7 +234,7 @@ def test_unknown_step_type_is_rejected():
 
 
 def test_distanceless_interval_is_rejected_rather_than_crashing_on_none():
-    with pytest.raises(ValueError, match="requires a distance"):
+    with pytest.raises(ValueError, match="requires a distance or a duration"):
         exec_step(1, "interval")
 
 

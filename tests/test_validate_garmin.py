@@ -90,3 +90,23 @@ def test_default_is_the_shipped_preference_default():
     payload = convert(prefs.apply(PLAN, prefs.resolve(None)))
     assert validate_garmin_workout(payload)[0] == []
     assert prefs.DEFAULTS["wu_cd_lap_press"] is True
+
+
+def test_timed_steps_are_valid_in_both_arms():
+    """Steps given by time ("15 мин в темпе 4:25-4:30") end on time — the
+    validator must accept that for intervals, recoveries and (toggle off)
+    warmup/cooldown."""
+    plan = {
+        "name": "15/10/5",
+        "warmup": {"duration": 600},
+        "intervals": [
+            {"type": "run", "duration": 900, "pace": "04:25", "pace_slow": "04:30"},
+            {"type": "recovery", "duration": 300},
+            {"type": "break", "name": "20 squats"},
+        ],
+        "cooldown": {"duration": 600},
+    }
+    for lap_press in (True, False):
+        payload = convert(prefs.apply(plan, prefs.resolve({"wu_cd_lap_press": lap_press})))
+        errors, _ = validate_garmin_workout(payload, wu_cd_lap_press=lap_press)
+        assert errors == [], f"lap_press={lap_press}: {errors}"

@@ -55,21 +55,21 @@ def _validate_step(
         # survives to the watch. Hardcoding lap.button rejected every plan that
         # said "2 km warmup" — exactly what SYSTEM_PROMPT.md tells the model to
         # emit. In the toggle-off arm lap.button is still accepted: a plan that
-        # never stated a distance has none to keep.
+        # never stated a distance or a time has none to keep.
         if wu_cd_lap_press:
             if end_condition != "lap.button":
                 errors.append(
                     f"{path}: {step_type} must end by lap.button when "
                     f"wu_cd_lap_press is on"
                 )
-        elif end_condition == "distance":
+        elif end_condition in ("distance", "time"):
             if not _is_number(step.get("endConditionValue")):
                 errors.append(f"{path}: {step_type} must have numeric endConditionValue")
         elif end_condition != "lap.button":
-            errors.append(f"{path}: {step_type} must end by distance or lap.button")
+            errors.append(f"{path}: {step_type} must end by distance, time or lap.button")
     elif step_type == "interval":
-        if end_condition != "distance":
-            errors.append(f"{path}: interval must end by distance")
+        if end_condition not in ("distance", "time"):
+            errors.append(f"{path}: interval must end by distance or time")
         if not _is_number(step.get("endConditionValue")):
             errors.append(f"{path}: interval must have numeric endConditionValue")
         if (step.get("targetType") or {}).get("workoutTargetTypeKey") != "pace.zone":
@@ -77,8 +77,8 @@ def _validate_step(
         if not (_is_number(step.get("targetValueOne")) and _is_number(step.get("targetValueTwo"))):
             errors.append(f"{path}: interval must have numeric targetValueOne/Two")
     elif step_type == "recovery":
-        if end_condition != "distance":
-            errors.append(f"{path}: recovery must end by distance")
+        if end_condition not in ("distance", "time", "lap.button"):
+            errors.append(f"{path}: recovery must end by distance, time or lap.button")
         if not _is_number(step.get("endConditionValue")):
             errors.append(f"{path}: recovery must have numeric endConditionValue")
     elif step_type == "rest":

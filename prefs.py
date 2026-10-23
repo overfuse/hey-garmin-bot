@@ -24,8 +24,8 @@ import copy
 DEFAULTS: dict[str, bool] = {
     "add_warmup": False,      # add a warmup even when the plan has none
     "add_cooldown": False,    # add a cooldown even when the plan has none
-    "wu_cd_lap_press": True,  # drop warmup/cooldown distance; end on lap press
-    "wu_cd_skip_pace": True,  # drop warmup/cooldown pace target
+    "wu_cd_lap_press": True,  # drop warmup/cooldown distance/time; end on lap press
+    "wu_cd_skip_pace": True,  # drop warmup/cooldown pace target (and range)
 }
 
 KEYS = frozenset(DEFAULTS)
@@ -44,7 +44,7 @@ def apply(workout_json: dict, prefs: dict[str, bool]) -> dict:
     """Enforce preferences on a parsed workout dict; returns a new dict.
 
     An empty `{}` section is meaningful downstream: garmin_convert turns a
-    warmup/cooldown without distance into a lap-button-ended step, which is
+    warmup/cooldown without distance or duration into a lap-button-ended step, which is
     exactly what "always include warmup" should produce.
 
     add_* is literal: the section is added even when the description said to
@@ -62,6 +62,8 @@ def apply(workout_json: dict, prefs: dict[str, bool]) -> dict:
         if isinstance(body, dict):
             if prefs.get("wu_cd_lap_press"):
                 body.pop("distance", None)
+                body.pop("duration", None)
             if prefs.get("wu_cd_skip_pace"):
                 body.pop("pace", None)
+                body.pop("pace_slow", None)
     return out

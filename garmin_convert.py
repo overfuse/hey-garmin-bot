@@ -11,7 +11,9 @@ Key characteristics (unchanged from prior version unless noted):
 * `stepType.stepTypeId` / `displayOrder` mapping:
   1 warm‑up, 2 cool‑down, 3 interval, 4 recovery, 5 rest, 6 repeat.
 * Paced runs use `pace.zone` with **targetValueOne = fast bound**,
-  **targetValueTwo = slow bound** (± 5 s/km converted to m/s).
+  **targetValueTwo = slow bound** (± 5 s/km converted to m/s, or the
+  stated range verbatim when the step carries `pace_slow`).
+* Steps given by time (`duration`, seconds) end on time, not distance.
 * Comprehensive `endCondition`, `endConditionValue`, `preferredEndConditionUnit`.
 * Every element has **stepOrder** (and **childStepId = 1** when inside a repeat).
 
@@ -38,9 +40,14 @@ def pace_to_sec_per_km(pace: str) -> int:
 def sec_per_km_to_mps(sec: float) -> float:
     return 1000.0 / sec
 
-def pace_window_mps(pace: str, delta: int = 5) -> Tuple[float, float]:
+def pace_window_mps(pace: str, delta: int = 5, pace_slow: Optional[str] = None) -> Tuple[float, float]:
+    """(fast, slow) bounds in m/s. A stated range ("4:25-4:30" → pace, pace_slow)
+    is used as-is; a single pace gets a ±delta window around it."""
     base = pace_to_sec_per_km(pace)
-    fast_sec, slow_sec = base - delta, base + delta
+    if pace_slow is not None:
+        fast_sec, slow_sec = base, pace_to_sec_per_km(pace_slow)
+    else:
+        fast_sec, slow_sec = base - delta, base + delta
     if fast_sec <= 0:
         raise ValueError("Pace too fast for ±delta window")
     return sec_per_km_to_mps(fast_sec), sec_per_km_to_mps(slow_sec)
@@ -74,7 +81,9 @@ STEP_META = {
 
 def exec_step(step_order: int, meta_key: str, *,
               distance: Optional[int] = None,
+              duration: Optional[int] = None,
               pace: Optional[str] = None,
+              pace_slow: Optional[str] = None,
               rest: Optional[int] = None,
               description: Optional[str] = None,
               lap: bool = False,
@@ -85,11 +94,12 @@ def exec_step(step_order: int, meta_key: str, *,
     *type*. Deriving them from the type is how warmup/cooldown distance and pace
     used to be silently discarded: the model extracted "2 км разминка" correctly,
     the eval suite scored it as a pass, and the watch received "warm up until you
-    press the lap button". Any step with a distance ends on distance; any step
-    with a pace carries a pace target.
+    press the lap button". Any step with a duration ends on time, any other step
+    with a distance ends on distance; any step with a pace carries a pace target.
 
     `lap=True` opts a distance-less step into the lap-button end condition. It is
-    an explicit flag, not a general fallback: a distance-less *interval* is still
+    an explicit flag, not a general fallback: an *interval* with neither distance
+    nor duration is still
     a modelling error and must keep raising, while a break step (in-place drill,
     no distance by design) legitimately ends on the lap press.
     """
@@ -108,7 +118,7 @@ def exec_step(step_order: int, meta_key: str, *,
 
     # Target: a pace, wherever it appears — including on a warmup or cooldown.
     if pace is not None:
-        fast_mps, slow_mps = pace_window_mps(pace)
+        fast_mps, slow_mps = pace_window_mps(pace, pace_slow=pace_slow)
         dto["targetType"] = TARGET_PACE
         dto["targetValueOne"] = fast_mps   # high (fast)
         dto["targetValueTwo"] = slow_mps   # low (slow)
@@ -116,15 +126,19 @@ def exec_step(step_order: int, meta_key: str, *,
         dto["targetType"] = TARGET_NO
 
     # End condition, in order of specificity: time > distance > lap button.
+    # Time wins over distance: a timed step's distance, if a model emitted one
+    # too, was derived from a pace the athlete may not hold.
     if meta_key == "rest":
         if rest is None:
             raise ValueError("rest step requires a duration in seconds")
+        duration = rest
+    if duration is not None:
         dto.update({
             "endCondition": END_TIME,
-            "endConditionValue": float(rest),
+            "endConditionValue": float(duration),
             "preferredEndConditionUnit": None,
             "durationType": {"workoutStepDurationTypeKey": "time"},
-            "durationValue": rest,
+            "durationValue": duration,
         })
     elif distance is not None:
         dto.update({
@@ -135,8 +149,8 @@ def exec_step(step_order: int, meta_key: str, *,
             "durationValue": distance,
         })
     elif lap or meta_key in ("warmup", "cooldown"):
-        # Lap-button end: a distance-less warmup/cooldown (SYSTEM_PROMPT.md
-        # promises "still include the section without distance — transition
+        # Lap-button end: a warmup/cooldown with neither distance nor duration
+        # (SYSTEM_PROMPT.md promises "still include the section — transition
         # occurs by pressing the Lap button"), or a step that asked for it
         # explicitly via `lap=True` (break steps).
         dto.update({
@@ -145,7 +159,7 @@ def exec_step(step_order: int, meta_key: str, *,
             "preferredEndConditionUnit": None,
         })
     else:
-        raise ValueError(f"{meta_key} step requires a distance")
+        raise ValueError(f"{meta_key} step requires a distance or a duration")
 
     return dto
 
@@ -169,6 +183,10 @@ def repeat_group(order: int, iterations: int, children: List[Dict[str, Any]]) ->
 # Converter core
 # ---------------------------------------------------------------------------
 
+def _extent_and_pace(elem: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: elem.get(k) for k in ("distance", "duration", "pace", "pace_slow")}
+
+
 def convert(interval_json: Dict[str, Any]) -> Dict[str, Any]:
     order = 0
     steps: List[Dict[str, Any]] = []
@@ -177,7 +195,7 @@ def convert(interval_json: Dict[str, Any]) -> Dict[str, Any]:
     if "warmup" in interval_json:
         wu = interval_json["warmup"] or {}
         order += 1
-        steps.append(exec_step(order, "warmup", distance=wu.get("distance"), pace=wu.get("pace")))
+        steps.append(exec_step(order, "warmup", **_extent_and_pace(wu)))
 
     # Recursive element handling
     def make_step(elem: Dict[str, Any], *, nested=False) -> Dict[str, Any]:
@@ -186,10 +204,11 @@ def convert(interval_json: Dict[str, Any]) -> Dict[str, Any]:
         if etype == "run":
             key = "interval" if "pace" in elem else "recovery"
             order += 1
-            return exec_step(order, key, distance=elem["distance"], pace=elem.get("pace"), child=nested)
+            return exec_step(order, key, **_extent_and_pace(elem), child=nested)
         if etype == "recovery":
             order += 1
-            return exec_step(order, "recovery", distance=elem["distance"], child=nested)
+            return exec_step(order, "recovery", distance=elem.get("distance"),
+                             duration=elem.get("duration"), child=nested)
         if etype == "break":
             # In-place drill between runs (e.g. "30 frog jumps"): a recovery step
             # with no distance, named on screen, ended by the lap press.
@@ -214,7 +233,7 @@ def convert(interval_json: Dict[str, Any]) -> Dict[str, Any]:
     if "cooldown" in interval_json:
         cd = interval_json["cooldown"] or {}
         order += 1
-        steps.append(exec_step(order, "cooldown", distance=cd.get("distance"), pace=cd.get("pace")))
+        steps.append(exec_step(order, "cooldown", **_extent_and_pace(cd)))
 
     return {
         "workoutName": interval_json.get("name", "Converted Workout"),

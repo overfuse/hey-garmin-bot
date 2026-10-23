@@ -106,3 +106,11 @@ def test_intervals_are_untouched():
     out = apply(workout, dict.fromkeys(KEYS, True))
     assert out["intervals"] == workout["intervals"]
     assert out["name"] == workout["name"]
+
+
+def test_wu_cd_toggles_strip_duration_and_pace_range_too():
+    """A timed warmup ("10 мин разминка") must obey the lap-press toggle the
+    same way a distance warmup does, and a pace range goes with the pace."""
+    workout = _workout(warmup={"duration": 600, "pace": "05:30", "pace_slow": "05:45"})
+    out = apply(workout, resolve(None))
+    assert out["warmup"] == {}

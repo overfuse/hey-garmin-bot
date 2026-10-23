@@ -11,7 +11,7 @@
     },
     "warmup": {
       "type": "object",
-      "description": "Optional easy running before the first interval (lap-based if distance omitted)",
+      "description": "Optional easy running before the first interval (lap-based if distance and duration omitted)",
       "additionalProperties": false,
       "properties": {
         "distance": {
@@ -19,10 +19,20 @@
           "minimum": 1,
           "description": "Distance in metres"
         },
+        "duration": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Duration in seconds (for a step given by time)"
+        },
         "pace": {
           "type": "string",
           "pattern": "^[0-9]+:[0-5][0-9]$",
           "description": "Optional target pace (min:sec per km)"
+        },
+        "pace_slow": {
+          "type": "string",
+          "pattern": "^[0-9]+:[0-5][0-9]$",
+          "description": "Slow end of a stated pace range (min:sec per km); 'pace' is then the fast end"
         }
       }
     },
@@ -33,7 +43,7 @@
     },
     "cooldown": {
       "type": "object",
-      "description": "Optional easy running after the last interval (lap-based if distance omitted)",
+      "description": "Optional easy running after the last interval (lap-based if distance and duration omitted)",
       "additionalProperties": false,
       "properties": {
         "distance": {
@@ -41,10 +51,20 @@
           "minimum": 1,
           "description": "Distance in metres"
         },
+        "duration": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Duration in seconds (for a step given by time)"
+        },
         "pace": {
           "type": "string",
           "pattern": "^[0-9]+:[0-5][0-9]$",
           "description": "Optional target pace (min:sec per km)"
+        },
+        "pace_slow": {
+          "type": "string",
+          "pattern": "^[0-9]+:[0-5][0-9]$",
+          "description": "Slow end of a stated pace range (min:sec per km); 'pace' is then the fast end"
         }
       }
     }
@@ -52,8 +72,9 @@
   "definitions": {
     "runStep": {
       "type": "object",
-      "description": "A running segment. Omit 'pace' to model an easy recovery jog.",
-      "required": ["type", "distance"],
+      "description": "A running segment, by distance or by time. Omit 'pace' to model an easy recovery jog.",
+      "required": ["type"],
+      "anyOf": [{ "required": ["distance"] }, { "required": ["duration"] }],
       "additionalProperties": false,
       "properties": {
         "type": { "const": "run" },
@@ -62,10 +83,20 @@
           "minimum": 1,
           "description": "Distance in metres"
         },
+        "duration": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Duration in seconds (for a step given by time)"
+        },
         "pace": {
           "type": "string",
           "pattern": "^[0-9]+:[0-5][0-9]$",
           "description": "Target pace (min:sec per km)"
+        },
+        "pace_slow": {
+          "type": "string",
+          "pattern": "^[0-9]+:[0-5][0-9]$",
+          "description": "Slow end of a stated pace range (min:sec per km); 'pace' is then the fast end"
         }
       }
     },
@@ -85,8 +116,9 @@
     },
     "recoveryStep": {
       "type": "object",
-      "description": "An active recovery jog segment without a target pace.",
-      "required": ["type", "distance"],
+      "description": "An active recovery jog segment without a target pace, by distance or by time.",
+      "required": ["type"],
+      "anyOf": [{ "required": ["distance"] }, { "required": ["duration"] }],
       "additionalProperties": false,
       "properties": {
         "type": { "const": "recovery" },
@@ -94,6 +126,11 @@
           "type": "integer",
           "minimum": 1,
           "description": "Distance in metres"
+        },
+        "duration": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Duration in seconds (for a step given by time)"
         }
       }
     },

@@ -450,4 +450,39 @@ C11 = Case(
     ],
 )
 
-CASES = [C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11]
+
+# --- Case 12: minutes skeleton + pace range + timed warmup/cooldown ----------
+# Real workout (2026-10). The old prompt converted every timed step to a
+# distance using the pace (15 мин @ 4:28 → 3360 m), dropped the 10-minute
+# warmup/cooldown (no slot for a time) and collapsed "4:25-4:30" to 04:28.
+# "15/10/5" is a skeleton in MINUTES; "через 5 мин между" goes only between
+# segments and keeps its explicit 5:30 pace.
+def _c12_timed(r):
+    return [(e.get("type"), e.get("duration"), e.get("pace"), e.get("pace_slow"))
+            for e in _intervals(r)]
+
+
+C12 = Case(
+    name="minutes-skeleton+pace-range",
+    prompt=(
+        "10 мин разминка\n"
+        "15/10/5\n"
+        "Все через 5 мин между в темпе около 5:30\n"
+        "15 мин, 10 мин и 5 мин в темпе около 4:25-4:30\n"
+        "10 мин заминка"
+    ),
+    expected="wu/cd 600 s; run 900/300/600/300/300 s, work @04:25–04:30, between @05:30; no distances",
+    checks=[
+        ("warm/cool 600 s", lambda r: (r.get("warmup") or {}).get("duration") == 600
+            and (r.get("cooldown") or {}).get("duration") == 600),
+        ("durations 900/300/600/300/300", lambda r: [e.get("duration") for e in _intervals(r)]
+            == [900, 300, 600, 300, 300]),
+        ("no derived distances", lambda r: not any(s.get("distance") for s in _flat_steps(r))
+            and not _warmup(r) and not _cooldown(r)),
+        ("work legs keep the 4:25-4:30 range", lambda r: [t[2:] for t in _c12_timed(r)][0::2]
+            == [("04:25", "04:30")] * 3),
+        ("between legs @5:30", lambda r: [t[2] for t in _c12_timed(r)][1::2] == ["05:30"] * 2),
+    ],
+)
+
+CASES = [C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12]
