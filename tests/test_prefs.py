@@ -6,7 +6,7 @@ behavior: sections added, distance/pace stripped, plan-text values
 overridden, and nothing else in the workout touched.
 """
 
-from prefs import DEFAULTS, KEYS, apply, resolve
+from prefs import DEFAULTS, KEYS, apply, is_valid, resolve
 
 
 def _workout(**extra):
@@ -48,6 +48,31 @@ def test_resolve_drops_unknown_keys_and_coerces_bool():
     assert "nonsense" not in prefs
     assert prefs["add_warmup"] is True
     assert set(prefs) == set(KEYS)
+
+
+def test_lang_defaults_to_russian_and_survives_resolve():
+    assert resolve(None)["lang"] == "ru"
+    # Users who saved prefs before the key existed get the default too.
+    assert resolve({"add_warmup": True})["lang"] == "ru"
+    assert resolve({"lang": "en"})["lang"] == "en"
+
+
+def test_processing_time_is_off_by_default():
+    assert resolve(None)["show_processing_time"] is False
+    assert resolve({"show_processing_time": True})["show_processing_time"] is True
+
+
+def test_resolve_drops_unsupported_lang():
+    assert resolve({"lang": "de"})["lang"] == "ru"
+    assert resolve({"lang": True})["lang"] == "ru"
+
+
+def test_is_valid():
+    assert is_valid("lang", "en") and is_valid("lang", "ru")
+    assert not is_valid("lang", "de") and not is_valid("lang", True)
+    assert is_valid("add_warmup", False)
+    assert not is_valid("add_warmup", "en") and not is_valid("add_warmup", 1)
+    assert not is_valid("nonsense", True)
 
 
 # --- apply -------------------------------------------------------------------

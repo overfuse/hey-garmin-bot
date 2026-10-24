@@ -1,4 +1,4 @@
-"""Per-user workout-structure preferences (plus the not-a-workout gate toggle).
+"""Per-user preferences: workout structure, the not-a-workout gate, reply copy.
 
 One place owns the preference catalog: the storage whitelist (user.py / the
 webapp API validate against KEYS), the defaults, and the enforcement. The
@@ -17,11 +17,13 @@ baselines completely untouched.
 
 import copy
 
+from i18n import DEFAULT_LANG, LANGS
+
 # Defaults are product policy, not neutrality: warmup/cooldown sections that
 # end on the lap button and don't beep about pace match how these sections
 # are actually run, so they start enabled. Auto-adding sections the athlete
 # didn't ask for is more opinionated, so those start disabled.
-DEFAULTS: dict[str, bool] = {
+DEFAULTS: dict[str, bool | str] = {
     "add_warmup": False,      # add a warmup even when the plan has none
     "add_cooldown": False,    # add a cooldown even when the plan has none
     "wu_cd_lap_press": True,  # drop warmup/cooldown distance/time; end on lap press
@@ -31,21 +33,39 @@ DEFAULTS: dict[str, bool] = {
     # or invented workout on the watch; the toggle is the escape hatch for a
     # user whose real plans the gate misjudges.
     "reject_non_workouts": True,
+    # Language of the bot's replies (i18n.LANGS). Also not a structure edit.
+    # Russian by default — that's the audience; English is opt-in.
+    "lang": DEFAULT_LANG,
+    # Append "⚡ Processed in N ms" to the upload confirmation. Off by
+    # default: it's a debugging number, not something athletes act on.
+    "show_processing_time": False,
 }
 
 KEYS = frozenset(DEFAULTS)
 
 
-def resolve(stored: dict | None) -> dict[str, bool]:
-    """Merge a stored prefs dict over the defaults, dropping unknown keys."""
+def is_valid(key: str, value) -> bool:
+    """Whether `value` may be stored under `key`: a known language for
+    "lang", a real bool (not 0/1) for everything else."""
+    if key == "lang":
+        return value in LANGS
+    return key in KEYS and isinstance(value, bool)
+
+
+def resolve(stored: dict | None) -> dict[str, bool | str]:
+    """Merge a stored prefs dict over the defaults, dropping unknown keys
+    (and an unsupported language, which falls back to the default)."""
     prefs = dict(DEFAULTS)
     for key, value in (stored or {}).items():
-        if key in KEYS:
+        if key == "lang":
+            if value in LANGS:
+                prefs[key] = value
+        elif key in KEYS:
             prefs[key] = bool(value)
     return prefs
 
 
-def apply(workout_json: dict, prefs: dict[str, bool]) -> dict:
+def apply(workout_json: dict, prefs: dict[str, bool | str]) -> dict:
     """Enforce preferences on a parsed workout dict; returns a new dict.
 
     An empty `{}` section is meaningful downstream: garmin_convert turns a

@@ -24,6 +24,7 @@ from aiohttp import web
 
 import prefs
 import user
+from i18n import LANGS
 from tg_init_data import InitDataError, validate_init_data
 
 _WEBAPP_DIR = Path(__file__).resolve().parent / "webapp"
@@ -36,7 +37,7 @@ PAGE_JS_KEY = web.AppKey("page_js", str)
 # settings page left open on a slow decision without inviting week-old replays.
 INIT_DATA_MAX_AGE_S = 3600
 
-# The largest legitimate request is a four-boolean JSON object; initData in the
+# The largest legitimate request is a small object of booleans plus "lang"; initData in the
 # header doesn't count against this. Anything bigger is not our client.
 _MAX_BODY = 4096
 
@@ -114,18 +115,19 @@ async def handle_put_prefs(request: web.Request) -> web.Response:
     except Exception:
         raise web.HTTPBadRequest(text="body must be JSON") from None
 
-    # PUT merges known boolean keys over the user's CURRENT prefs. Omitted
-    # keys keep their stored value rather than resetting to defaults, so a
-    # Mini App page cached from before a key existed can still save (see
-    # CLAUDE.md, "Mini App compatibility"). Unknown keys are still rejected:
-    # app.js ships with this server, so a client can only lag, never lead.
+    # PUT merges known keys over the user's CURRENT prefs. Omitted keys keep
+    # their stored value rather than resetting to defaults, so a Mini App page
+    # cached from before a key existed can still save (see CLAUDE.md, "Mini
+    # App compatibility"). Unknown keys are still rejected: app.js ships with
+    # this server, so a client can only lag, never lead.
     if (
         not isinstance(body, dict)
         or not body
-        or not set(body) <= prefs.KEYS
-        or not all(isinstance(v, bool) for v in body.values())
+        or not all(prefs.is_valid(k, v) for k, v in body.items())
     ):
-        raise web.HTTPBadRequest(text=f"expected booleans for keys: {sorted(prefs.KEYS)}")
+        raise web.HTTPBadRequest(
+            text=f"expected booleans for keys {sorted(prefs.KEYS - {'lang'})}, lang in {list(LANGS)}"
+        )
 
     doc = await user.get_user(uid)
     merged = {**prefs.resolve((doc or {}).get("prefs")), **body}

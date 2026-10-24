@@ -93,7 +93,8 @@ async def test_get_prefs_merges_stored_over_defaults(client, users):
 async def test_put_then_get_round_trip(client, users):
     new = {
         "add_warmup": True, "add_cooldown": True, "wu_cd_lap_press": False,
-        "wu_cd_skip_pace": True, "reject_non_workouts": False,
+        "wu_cd_skip_pace": True, "reject_non_workouts": False, "lang": "en",
+        "show_processing_time": True,
     }
     resp = await client.put("/api/prefs", headers=AUTH, json=new)
     assert resp.status == 200
@@ -108,6 +109,8 @@ async def test_put_then_get_round_trip(client, users):
         {},  # nothing to save
         {**DEFAULTS, "extra": True},  # unknown key
         {**DEFAULTS, "add_warmup": "yes"},  # non-boolean
+        {**DEFAULTS, "lang": "de"},  # unsupported language
+        {**DEFAULTS, "lang": True},  # language must be a code
         ["add_warmup"],  # not an object
     ],
 )
@@ -126,7 +129,27 @@ async def test_put_from_older_client_keeps_omitted_keys(client, users):
                        "wu_cd_lap_press": True, "wu_cd_skip_pace": True}
     resp = await client.put("/api/prefs", headers=AUTH, json=old_client_body)
     assert resp.status == 200
-    assert users[42]["prefs"] == {**old_client_body, "reject_non_workouts": False}
+    assert users[42]["prefs"] == {**DEFAULTS, **old_client_body, "reject_non_workouts": False}
+
+
+@pytest.mark.asyncio
+async def test_put_from_client_without_newer_keys_keeps_them(client, users):
+    # A Mini App page cached before the language selector and the processing
+    # time toggle existed sends only the five original boolean keys; the
+    # user's stored values for the newer keys must survive.
+    stored = {**DEFAULTS, "lang": "en", "show_processing_time": True}
+    users[42] = {"telegram_id": 42, "prefs": stored}
+    old_body = {k: v for k, v in DEFAULTS.items() if k not in ("lang", "show_processing_time")}
+    resp = await client.put("/api/prefs", headers=AUTH, json=old_body)
+    assert resp.status == 200
+    assert users[42]["prefs"] == stored
+
+
+@pytest.mark.asyncio
+async def test_put_lang_alone(client, users):
+    resp = await client.put("/api/prefs", headers=AUTH, json={"lang": "en"})
+    assert resp.status == 200
+    assert users[42]["prefs"] == {**DEFAULTS, "lang": "en"}
 
 
 @pytest.mark.asyncio
@@ -146,7 +169,7 @@ async def test_put_rejects_non_json(client, users):
 @pytest.mark.asyncio
 async def test_prefs_are_keyed_to_the_initdata_user(client, users):
     other = {"Authorization": "tma " + make_init_data(user_id=99)}
-    await client.put("/api/prefs", headers=other, json=dict.fromkeys(DEFAULTS, True))
+    await client.put("/api/prefs", headers=other, json={"add_warmup": True})
     assert 99 in users and 42 not in users
 
 

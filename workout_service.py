@@ -42,7 +42,7 @@ from workout_log import log_workout_request
 
 
 class FailureCode(Enum):
-    RATE_LIMITED = "rate_limited"        # over quota; detail is the human-readable limit message
+    RATE_LIMITED = "rate_limited"        # over quota; Failure.rate_limit says which window, how long
     LIMITER_DOWN = "limiter_down"        # Redis unreachable; fail closed, nothing processed
     LLM_BUSY = "llm_busy"                # load shed before any provider call; quota refunded
     CONFIG_ERROR = "config_error"        # our env/misconfig, pre-request; quota refunded
@@ -65,13 +65,22 @@ class Success:
 class Failure:
     code: FailureCode
     detail: str = ""
+    # Set for RATE_LIMITED only: the bot words the window and the wait itself,
+    # in the user's language.
+    rate_limit: RateLimitExceeded | None = None
+
+
+class Progress(Enum):
+    """Mid-flow events the bot may surface; it owns the wording."""
+
+    SESSION_REFRESHED = "session_refreshed"  # 401 → token refreshed → retrying upload
 
 
 Outcome = Success | Failure
 
 # Mid-flow progress hook (e.g. "refreshed, retrying"). Async so the bot can
 # surface it as a chat message without this module importing Telegram.
-Notify = Callable[[str], Awaitable[None]]
+Notify = Callable[[Progress], Awaitable[None]]
 
 # Fired once the request is admitted (quota consumed) and real work is about to
 # start — the point where the bot shows its "Uploading..." notice. Kept as a
@@ -79,7 +88,7 @@ Notify = Callable[[str], Awaitable[None]]
 OnAccepted = Callable[[], Awaitable[None]]
 
 
-async def _noop_notify(_: str) -> None:
+async def _noop_notify(_: Progress) -> None:
     return None
 
 
@@ -106,7 +115,7 @@ async def process_workout(
     try:
         receipt = await consume(user_id)
     except RateLimitExceeded as e:
-        return Failure(FailureCode.RATE_LIMITED, str(e))
+        return Failure(FailureCode.RATE_LIMITED, str(e), rate_limit=e)
     except RateLimiterUnavailable:
         # Fail closed: without a working limiter we cannot bound spend.
         return Failure(FailureCode.LIMITER_DOWN)
@@ -201,7 +210,7 @@ async def process_workout(
             user_data["garmin_auth"] = new_token
             await save_user(user_id, user_data)
             await log_auth_event(user_id, "token_refresh", detail="reactive-401")
-            await notify("Session refreshed, retrying upload...")
+            await notify(Progress.SESSION_REFRESHED)
             workout_id, refreshed = await upload_parsed_workout(new_token, workout_json)
     except GarminAuthExpired:
         await log_workout_request(user_id=user_id, prompt=plan_text, error="auth refresh failed")

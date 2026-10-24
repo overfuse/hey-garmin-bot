@@ -15,6 +15,7 @@ Try it live: [HeyGarminBot on Telegram](https://t.me/HeyGarminBot)
 - **Workout Logging**: All prompts and results are logged to MongoDB with processing times and error tracking.
 - **Usage Statistics**: Users can check their API usage with the `/stats` command.
 - **Logout**: Users can remove their Garmin authorization with the `/logout` command.
+- **Language**: Replies are in Russian by default; `/language` (or the settings Mini App) switches to English. Copy lives in `locales/*.ftl` ([Fluent](https://projectfluent.org)).
 - **Session Management**: Temporary credentials are stored in a TTL cache with a 5-minute expiration to avoid persisting raw passwords.
 - **Persistent Storage**: User state, Garmin session tokens, and workout logs are stored in MongoDB via Motor (async MongoDB driver).
 
@@ -156,6 +157,7 @@ The bot implements a Redis-based sliding window rate limiting system to protect 
 - **Configurable Limits**: Set via environment variables (hourly/daily/monthly)
 - **User Commands**:
   - `/stats` - Check current usage statistics
+  - `/language` - Switch the bot's language (Русский / English)
   - Users receive clear error messages with time-to-retry when limits are exceeded
 
 ### Architecture

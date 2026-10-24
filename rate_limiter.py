@@ -62,15 +62,19 @@ class RateLimitExceeded(Exception):
         self.retry_after = retry_after
         super().__init__(self._message())
 
+    def wait(self) -> int:
+        """retry_after rounded up to the window's unit: minutes for hourly,
+        hours for daily, days for monthly (never 0)."""
+        unit = {"hourly": 60, "daily": 3600}.get(self.scope, 86400)
+        return max(1, math.ceil(self.retry_after / unit))
+
     def _message(self) -> str:
+        # English, for logs and str(e). Users get i18n's fail-rate-limited.
         if self.scope == "hourly":
-            mins = max(1, math.ceil(self.retry_after / 60))
-            return f"Hourly limit reached ({self.cap} per hour). Try again in {mins} minute(s)."
+            return f"Hourly limit reached ({self.cap} per hour). Try again in {self.wait()} minute(s)."
         if self.scope == "daily":
-            hours = max(1, math.ceil(self.retry_after / 3600))
-            return f"Daily limit reached ({self.cap} per day). Try again in {hours} hour(s)."
-        days = max(1, math.ceil(self.retry_after / 86400))
-        return f"Monthly limit reached ({self.cap} per month). Try again in {days} day(s)."
+            return f"Daily limit reached ({self.cap} per day). Try again in {self.wait()} hour(s)."
+        return f"Monthly limit reached ({self.cap} per month). Try again in {self.wait()} day(s)."
 
 
 class RateLimiterUnavailable(Exception):

@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>Workout settings</title>
+<title>Настройки тренировок</title>
 <style>
   /* Theme comes entirely from Telegram's CSS variables so the page follows
      the client's light/dark palette; the second value is the fallback for
@@ -54,6 +54,11 @@
     box-shadow: 0 1px 3px rgba(0,0,0,.25);
   }
   .row input[type="checkbox"]:checked::after { left: 22px; }
+  .row select {
+    flex: none; font: inherit; padding: 4px 8px; border-radius: 8px;
+    border: none; color: var(--tg-theme-text-color, #000);
+    background: var(--tg-theme-secondary-bg-color, #f0f0f0);
+  }
   #status {
     margin: 12px 4px 0; font-size: 14px;
     color: var(--tg-theme-hint-color, #8e8e93);
@@ -64,33 +69,35 @@
 </head>
 <body class="loading">
 <main>
-  <h1>Workout structure</h1>
+  <!-- Text below is the Russian (default) fallback; app.js re-renders it in
+       the user's language from its STRINGS table via data-i18n keys. -->
+  <h1 data-i18n="structure">Структура тренировки</h1>
   <div class="card">
     <label class="row">
       <span class="text">
-        <span class="label">Always include warmup</span>
-        <span class="hint">Add a warmup even when the plan doesn't mention one</span>
+        <span class="label" data-i18n="add_warmup">Всегда добавлять разминку</span>
+        <span class="hint" data-i18n="add_warmup_hint">Добавлять разминку, даже если в плане её нет</span>
       </span>
       <input type="checkbox" id="add_warmup">
     </label>
     <label class="row">
       <span class="text">
-        <span class="label">Always include cooldown</span>
-        <span class="hint">Add a cooldown even when the plan doesn't mention one</span>
+        <span class="label" data-i18n="add_cooldown">Всегда добавлять заминку</span>
+        <span class="hint" data-i18n="add_cooldown_hint">Добавлять заминку, даже если в плане её нет</span>
       </span>
       <input type="checkbox" id="add_cooldown">
     </label>
     <label class="row">
       <span class="text">
-        <span class="label">End warmup/cooldown on lap press</span>
-        <span class="hint">Skip their distance or time — finish by pressing the lap button on the watch</span>
+        <span class="label" data-i18n="wu_cd_lap_press">Завершать разминку/заминку кнопкой круга</span>
+        <span class="hint" data-i18n="wu_cd_lap_press_hint">Без дистанции и времени — закончить нажатием кнопки Lap на часах</span>
       </span>
       <input type="checkbox" id="wu_cd_lap_press">
     </label>
     <label class="row">
       <span class="text">
-        <span class="label">No pace for warmup/cooldown</span>
-        <span class="hint">Skip pace targets on warmup and cooldown</span>
+        <span class="label" data-i18n="wu_cd_skip_pace">Без темпа на разминке/заминке</span>
+        <span class="hint" data-i18n="wu_cd_skip_pace_hint">Не задавать целевой темп для разминки и заминки</span>
       </span>
       <input type="checkbox" id="wu_cd_skip_pace">
     </label>
@@ -98,13 +105,33 @@
   <div class="card">
     <label class="row">
       <span class="text">
-        <span class="label">Ignore messages that aren't workouts</span>
-        <span class="hint">Don't send chat, questions or thanks to Garmin. Turn off if a real workout gets rejected</span>
+        <span class="label" data-i18n="reject_non_workouts">Игнорировать сообщения, которые не тренировки</span>
+        <span class="hint" data-i18n="reject_non_workouts_hint">Не отправлять в Garmin болтовню, вопросы и благодарности. Выключите, если настоящая тренировка отклоняется</span>
       </span>
       <input type="checkbox" id="reject_non_workouts">
     </label>
   </div>
-  <p id="status">Loading…</p>
+  <h1 data-i18n="messages">Сообщения бота</h1>
+  <div class="card">
+    <label class="row">
+      <span class="text">
+        <span class="label" data-i18n="show_processing_time">Показывать время обработки</span>
+        <span class="hint" data-i18n="show_processing_time_hint">Добавлять «⚡ Обработано за N мс» к подтверждению загрузки</span>
+      </span>
+      <input type="checkbox" id="show_processing_time">
+    </label>
+    <label class="row">
+      <span class="text">
+        <span class="label" data-i18n="language">Язык</span>
+        <span class="hint" data-i18n="language_hint">Язык сообщений бота и этой страницы</span>
+      </span>
+      <select id="lang">
+        <option value="ru">Русский</option>
+        <option value="en">English</option>
+      </select>
+    </label>
+  </div>
+  <p id="status">Загрузка…</p>
 </main>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="/app.js"></script>
