@@ -7,24 +7,33 @@ the numbers*.
 ## Commands
 
 ```bash
-uv run python -m evals.run haiku-5.5         # filter by model label substring
+uv run python -m evals.run haiku-5.5              # filter by model label substring
+uv run python -m evals.run haiku-5.5 -c 200 -c km # ...and by case-name substring
 EVAL_RUNS=2 uv run python -m evals.run haiku-5.5  # N runs per case
+EVAL_RUNS=2 uv run python -m evals.run haiku-5.5 --adaptive  # re-run only failures
+uv run python -m evals.run haiku-5.5 --history    # accumulated results, no calls
 ```
-
-There is no case filter — every batch runs all cases (see backlog #1).
 
 Scale (Luna, 2026-08): one run = 7 cases ≈ 27 checks, ~5 s/call. A 6-run batch
 is 42 calls ≈ 1 min wall / ~$0.15. Cost is time and attention, not money.
+(The suite has grown to 12 cases since.)
+
+When iterating on one rule, filter to the case(s) it affects with `-c`, then
+finish with a full-suite run before committing.
 
 ## The two questions — and the two run sizes
 
-**"Did my edit break something?" → `EVAL_RUNS=2`, prod model only.**
-This is the routine per-update check. Only a *systematic* failure blocks: a
+**"Did my edit break something?" → `EVAL_RUNS=2 --adaptive`, prod model only.**
+This is the routine per-update check. `--adaptive` runs every case once and
+re-runs only cases with a failure, so clean cases cost one call. A systematic
+failure fails the first run too, so this still catches every 0/2. Its
+leaderboard % is biased low (clean cells ran once), so don't compare it to a
+uniform batch. Only a *systematic* failure blocks: a
 check at 0/2 that passed before. A 1/2 flake is noise — do not iterate on it.
 
 **"What is the true score / is variant A better?" → `EVAL_RUNS=6+`, rarely.**
 Only for deliberate benchmarks (new model, prompt A/B, release gate). Both arms
-at the same n. Do not conclude a winner unless the gap is >4 points; anything
+at the same n, and never `--adaptive`. Do not conclude a winner unless the gap is >4 points; anything
 in the 96–100% band is a tie.
 
 ## Reading the numbers honestly
@@ -39,6 +48,19 @@ in the 96–100% band is a tie.
   difference needs that many runs to see, it is too small to act on.
 - Some flakes are genuine input ambiguity (e.g. "После 5 раз 100/100" parses
   two ways). More runs measure the mixture ratio; they can't remove it.
+
+## History
+
+Every run is appended to `evals/history.jsonl` (gitignored), keyed by model,
+`prompt_sha` (the system prompt that was sent) and `case_sha` (case input plus
+check labels and check source). After each batch, and on `--history` without
+any calls, the report sums every recorded run that matches the *current*
+prompt and case versions. Confidence accumulates across sessions, and an
+unchanged configuration never needs re-measuring: check `--history` before
+starting a benchmark. Editing a prompt or case starts that key over. Edits to
+helpers that checks call are not hashed, so after changing one, trust only
+batches run since. Records carry `adaptive: true` when they came from an
+adaptive batch.
 
 ## After a batch
 
@@ -62,16 +84,8 @@ subdivision example broke that case 0/3; restoring it fixed it).
   SYSTEM_PROMPT_REASONING.md serves OpenAI reasoning models — an edit to one
   does not cover the other; smoke-test whichever variant(s) changed.
 
-## Improvement backlog (agreed 2026-08-03, not yet implemented)
+## Improvement backlog (agreed 2026-08-03; items 1–3 done 2026-10-24: `-c`, history, `--adaptive`)
 
-1. **Case filter in `run.py`** — iterate on one rule without re-running all 7
-   cases (mirror the model-label filter). Smallest change, biggest win.
-2. **`history.jsonl` accumulation** — append batches keyed by
-   (model, prompt-file hash, case) instead of overwriting `last_results.json`,
-   so confidence accumulates across sessions and unchanged configurations
-   never need re-measuring.
-3. **Adaptive re-runs** — run everything once, re-run only cases with a
-   failure; halves a batch at equal detection power.
 4. **`reasoning_effort="high"` benchmark** — may cut arithmetic flakes at some
    latency cost; one 6-run batch would answer it.
 5. **Production post-parse validator + one retry** — deterministic checks

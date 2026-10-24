@@ -14,6 +14,8 @@ __pycache__
 
 # eval run output — regenerated and nondeterministic on every `python -m evals.run`
 evals/last_results.json
+# accumulated eval runs — local measurement record, grows every batch
+evals/history.jsonl
 
 # working notes / implementation plans — scratch, not a record of the codebase
 .plans/

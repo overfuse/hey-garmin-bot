@@ -13,7 +13,10 @@ Run from the repo root:
 ```bash
 uv run python -m evals.run                 # every model that has a provider key set
 uv run python -m evals.run haiku gpt-5     # filter models by label substring
+uv run python -m evals.run haiku -c 200    # filter cases by name substring (repeatable)
 EVAL_RUNS=3 uv run python -m evals.run     # repeat each case N times (recommended)
+EVAL_RUNS=2 uv run python -m evals.run haiku --adaptive  # extra runs only for failing cases
+uv run python -m evals.run haiku --history # accumulated results from history.jsonl, no calls
 ```
 
 Keys are read from `.env`: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and optionally
@@ -50,6 +53,11 @@ model's score by ~25 points. **Use `EVAL_RUNS=3+` before trusting a ranking.** W
   ```bash
   jq '.[] | select(.case=="200/200-budget" and .model=="anthropic/haiku-4.5") | .output' evals/last_results.json
   ```
+
+- Every run also appended to `evals/history.jsonl` (one JSON object per line, with
+  `model_id`, `prompt_sha`, `case_sha`, `batch`, `ts`, `adaptive`). The report ends
+  with a history section that sums every recorded run matching the current prompt
+  and case hashes, so results accumulate across batches until either one changes.
 
 ## Models (`models.py`)
 
