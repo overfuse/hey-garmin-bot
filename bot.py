@@ -97,6 +97,12 @@ _FAILURE_REPLIES: dict[FailureCode, str] = {
         "I couldn't turn that into a workout. Try describing the intervals "
         "with distances and paces, e.g. '2km warmup, 10x400m @ 3:45, 2km cooldown'."
     ),
+    FailureCode.NOT_A_WORKOUT: (
+        "That doesn't look like a workout, so I didn't send anything to Garmin "
+        "(and it wasn't counted against your quota). Describe the session with "
+        "distances, times or paces, e.g. '2km warmup, 10x400m @ 3:45, 2km cooldown'. "
+        "If this really was a workout, you can turn this check off in /settings."
+    ),
     FailureCode.TOKEN_UNREADABLE: (
         "Your stored Garmin session is unreadable. Use /logout then /start to log in again."
     ),

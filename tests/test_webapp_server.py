@@ -91,7 +91,10 @@ async def test_get_prefs_merges_stored_over_defaults(client, users):
 
 @pytest.mark.asyncio
 async def test_put_then_get_round_trip(client, users):
-    new = {"add_warmup": True, "add_cooldown": True, "wu_cd_lap_press": False, "wu_cd_skip_pace": True}
+    new = {
+        "add_warmup": True, "add_cooldown": True, "wu_cd_lap_press": False,
+        "wu_cd_skip_pace": True, "reject_non_workouts": False,
+    }
     resp = await client.put("/api/prefs", headers=AUTH, json=new)
     assert resp.status == 200
     assert users[42]["prefs"] == new
@@ -102,7 +105,7 @@ async def test_put_then_get_round_trip(client, users):
 @pytest.mark.parametrize(
     "body",
     [
-        {"add_warmup": True},  # partial: missing keys would reset to defaults
+        {},  # nothing to save
         {**DEFAULTS, "extra": True},  # unknown key
         {**DEFAULTS, "add_warmup": "yes"},  # non-boolean
         ["add_warmup"],  # not an object
@@ -112,6 +115,25 @@ async def test_put_rejects_malformed_bodies(client, users, body):
     resp = await client.put("/api/prefs", headers=AUTH, json=body)
     assert resp.status == 400
     assert users == {}
+
+
+@pytest.mark.asyncio
+async def test_put_from_older_client_keeps_omitted_keys(client, users):
+    # A Mini App page cached before reject_non_workouts existed sends only the
+    # four original keys; the user's stored value for the new key must survive.
+    users[42] = {"telegram_id": 42, "prefs": {**DEFAULTS, "reject_non_workouts": False}}
+    old_client_body = {"add_warmup": True, "add_cooldown": False,
+                       "wu_cd_lap_press": True, "wu_cd_skip_pace": True}
+    resp = await client.put("/api/prefs", headers=AUTH, json=old_client_body)
+    assert resp.status == 200
+    assert users[42]["prefs"] == {**old_client_body, "reject_non_workouts": False}
+
+
+@pytest.mark.asyncio
+async def test_put_partial_fills_unset_keys_from_defaults(client, users):
+    resp = await client.put("/api/prefs", headers=AUTH, json={"add_warmup": True})
+    assert resp.status == 200
+    assert users[42]["prefs"] == {**DEFAULTS, "add_warmup": True}
 
 
 @pytest.mark.asyncio

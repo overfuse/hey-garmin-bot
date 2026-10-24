@@ -74,6 +74,15 @@ TELEGRAM_BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
 # OpenAI
 OPENAI_API_KEY=sk-proj-...
 
+# Not-a-workout pre-gate (optional; TypeSafe Jev via OpenRouter). Unset → gate
+# is OFF; set but failing → skipped per message (circuit breaker). Defaults shown.
+OPENROUTER_API_KEY=sk-or-...
+# JEV_MODEL=typesafe/jev-1.14
+# JEV_REJECT_BELOW=0.3
+# JEV_TIMEOUT_S=2
+# JEV_BREAKER_FAILURES=3
+# JEV_BREAKER_COOLDOWN_S=300
+
 # MongoDB
 MONGODB_URI=mongodb://mongo:27017
 

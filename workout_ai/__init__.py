@@ -1,12 +1,14 @@
 """Workout AI package: LLM providers, provider dispatch, and the concurrency gate.
 
 Env configuration lives in config.py; provider dispatch in planner.py; the
-global concurrency gate in gate.py. bot.py should call parse_plan (gated);
-plan_to_json / plan_to_json_async are the ungated primitives for CLI/eval use.
+global concurrency gate in gate.py; the not-a-workout pre-gate in jev.py.
+bot.py should call parse_plan (gated); plan_to_json / plan_to_json_async are
+the ungated primitives for CLI/eval use.
 """
 
 from .errors import LLMBusy, LLMQuotaExhausted, WorkoutAIConfigError
 from .gate import parse_plan
+from .jev import workout_probability
 from .planner import plan_to_json, plan_to_json_async
 
 __all__ = [
@@ -16,4 +18,5 @@ __all__ = [
     "parse_plan",
     "plan_to_json",
     "plan_to_json_async",
+    "workout_probability",
 ]

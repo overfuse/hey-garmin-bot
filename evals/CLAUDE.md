@@ -96,7 +96,10 @@ re-runs (`--adaptive`), case pruning + whole-case pass rate (2026-10-24).
    new `FailureCode.NOT_A_WORKOUT` (billed, so no refund); (b) wrap the
    output as `ParseResult(is_workout, workout?)` with `is_workout` FIRST
    (field order drives decoding, see `workout_ai/models.py`). (a) alone is
-   safe to ship.
+   safe to ship. **Partly done (2026-10-24):** a Jev pre-gate
+   (`workout_ai/jev.py`, user pref `reject_non_workouts`, on by default)
+   rejects chatter before the LLM in production. Evals call the provider
+   directly and bypass it, and it fails open, so (a) is still worth adding.
 2. **Production post-parse validator + one retry** — deterministic checks
    (e.g. alternation segments sum to the stated budget, recoveries carry no
    pace) on the parsed dict would lift ~98% model output to ~99.9% effective

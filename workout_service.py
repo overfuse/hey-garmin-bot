@@ -13,6 +13,10 @@ at the door (empty account balance — no tokens consumed); all three refund.
 Past those, a billable call went out, so the quota stays consumed — refunding
 would make malformed input free to retry in a loop, the exact "failures cost
 nothing" hole that consuming up-front closes.
+
+One deliberate exception: NOT_A_WORKOUT from the Jev pre-gate refunds even
+though the input is the user's fault. The only spend is the ~$0.00002 Jev call,
+and a "thanks!" must not eat a workout from the user's quota.
 """
 
 import asyncio
@@ -26,7 +30,14 @@ from audit import log_auth_event
 from garmin import GarminAuthExpired, refresh_token_async, upload_parsed_workout
 from rate_limiter import RateLimiterUnavailable, RateLimitExceeded, consume, refund
 from user import get_garmin_token, save_user
-from workout_ai import LLMBusy, LLMQuotaExhausted, WorkoutAIConfigError, parse_plan
+from workout_ai import (
+    LLMBusy,
+    LLMQuotaExhausted,
+    WorkoutAIConfigError,
+    parse_plan,
+    workout_probability,
+)
+from workout_ai.config import JEV_ENABLED, JEV_REJECT_BELOW
 from workout_log import log_workout_request
 
 
@@ -38,6 +49,7 @@ class FailureCode(Enum):
     PROVIDER_QUOTA = "provider_quota"    # provider account out of credits; quota refunded
     PARSE_TIMEOUT = "parse_timeout"      # provider call exceeded its budget; billed
     PARSE_FAILED = "parse_failed"        # provider couldn't produce a workout; billed
+    NOT_A_WORKOUT = "not_a_workout"      # pre-gate judged the text chatter; no LLM call, refunded
     TOKEN_UNREADABLE = "token_unreadable"  # stored credential undecryptable; re-login required
     AUTH_EXPIRED = "auth_expired"        # 401 and the refresh also failed; re-login required
     UPLOAD_FAILED = "upload_failed"      # Garmin rejected the upload; billed
@@ -99,6 +111,20 @@ async def process_workout(
         # Fail closed: without a working limiter we cannot bound spend.
         return Failure(FailureCode.LIMITER_DOWN)
 
+    user_prefs = prefs.resolve(user_data.get("prefs"))
+
+    # Pre-gate before on_accepted so chatter never flashes "Uploading...".
+    # Off entirely without OPENROUTER_API_KEY. None (breaker open, Jev error)
+    # means "don't know": parse anyway.
+    if JEV_ENABLED and user_prefs["reject_non_workouts"]:
+        p = await workout_probability(plan_text)
+        if p is not None and p < JEV_REJECT_BELOW:
+            await refund(user_id, receipt)
+            await log_workout_request(
+                user_id=user_id, prompt=plan_text, error=f"not a workout (jev p={p:.2f})"
+            )
+            return Failure(FailureCode.NOT_A_WORKOUT)
+
     await on_accepted()
     start = time.monotonic()
 
@@ -143,7 +169,7 @@ async def process_workout(
     # here — after the LLM, before upload and logging — so the logged
     # workout_json is exactly what went to Garmin. Pure dict surgery, cannot
     # fail, costs nothing when the prefs change nothing.
-    workout_json = prefs.apply(workout_json, prefs.resolve(user_data.get("prefs")))
+    workout_json = prefs.apply(workout_json, user_prefs)
 
     try:
         token = await get_garmin_token(user_data)

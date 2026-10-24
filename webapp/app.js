@@ -1,10 +1,12 @@
 // Settings Mini App. All requests authenticate with the raw initData in the
 // Authorization header — the backend trusts nothing else. Keys must match
-// prefs.DEFAULTS on the Python side; the PUT is a full replacement, so every
-// key is always sent.
+// prefs.DEFAULTS on the Python side. Every key is sent, but the server merges
+// over stored prefs, so an older cached copy of this file still saves.
 "use strict";
 
-const KEYS = ["add_warmup", "add_cooldown", "wu_cd_lap_press", "wu_cd_skip_pace"];
+const KEYS = [
+  "add_warmup", "add_cooldown", "wu_cd_lap_press", "wu_cd_skip_pace", "reject_non_workouts",
+];
 
 const tg = window.Telegram && window.Telegram.WebApp;
 const statusEl = document.getElementById("status");

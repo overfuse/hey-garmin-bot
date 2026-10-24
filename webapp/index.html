@@ -25,6 +25,7 @@
     background: var(--tg-theme-section-bg-color, var(--tg-theme-bg-color, #fff));
     border-radius: 12px; overflow: hidden;
   }
+  .card + .card { margin-top: 16px; }
   .row {
     display: flex; align-items: center; gap: 12px; padding: 12px 16px;
     cursor: pointer; -webkit-tap-highlight-color: transparent;
@@ -92,6 +93,15 @@
         <span class="hint">Skip pace targets on warmup and cooldown</span>
       </span>
       <input type="checkbox" id="wu_cd_skip_pace">
+    </label>
+  </div>
+  <div class="card">
+    <label class="row">
+      <span class="text">
+        <span class="label">Ignore messages that aren't workouts</span>
+        <span class="hint">Don't send chat, questions or thanks to Garmin. Turn off if a real workout gets rejected</span>
+      </span>
+      <input type="checkbox" id="reject_non_workouts">
     </label>
   </div>
   <p id="status">Loading…</p>

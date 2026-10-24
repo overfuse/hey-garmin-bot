@@ -114,19 +114,24 @@ async def handle_put_prefs(request: web.Request) -> web.Response:
     except Exception:
         raise web.HTTPBadRequest(text="body must be JSON") from None
 
-    # PUT is a full replacement: exactly the known keys, all booleans. A
-    # partial dict would silently reset the missing keys to defaults on the
-    # next resolve, so reject it instead of guessing.
+    # PUT merges known boolean keys over the user's CURRENT prefs. Omitted
+    # keys keep their stored value rather than resetting to defaults, so a
+    # Mini App page cached from before a key existed can still save (see
+    # CLAUDE.md, "Mini App compatibility"). Unknown keys are still rejected:
+    # app.js ships with this server, so a client can only lag, never lead.
     if (
         not isinstance(body, dict)
-        or set(body) != set(prefs.KEYS)
+        or not body
+        or not set(body) <= prefs.KEYS
         or not all(isinstance(v, bool) for v in body.values())
     ):
         raise web.HTTPBadRequest(text=f"expected booleans for keys: {sorted(prefs.KEYS)}")
 
-    await user.set_prefs(uid, body)
+    doc = await user.get_user(uid)
+    merged = {**prefs.resolve((doc or {}).get("prefs")), **body}
+    await user.set_prefs(uid, merged)
     print(f"[webapp] prefs saved user={uid}", flush=True)
-    return web.json_response(body, headers=_COMMON_HEADERS)
+    return web.json_response(merged, headers=_COMMON_HEADERS)
 
 
 def create_app(bot_token: str | None = None) -> web.Application:

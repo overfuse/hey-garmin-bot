@@ -1,4 +1,4 @@
-"""Per-user workout-structure preferences.
+"""Per-user workout-structure preferences (plus the not-a-workout gate toggle).
 
 One place owns the preference catalog: the storage whitelist (user.py / the
 webapp API validate against KEYS), the defaults, and the enforcement. The
@@ -26,6 +26,11 @@ DEFAULTS: dict[str, bool] = {
     "add_cooldown": False,    # add a cooldown even when the plan has none
     "wu_cd_lap_press": True,  # drop warmup/cooldown distance/time; end on lap press
     "wu_cd_skip_pace": True,  # drop warmup/cooldown pace target (and range)
+    # Not a structure edit: read by workout_service before the LLM call, and
+    # ignored by apply(). On by default — chatter otherwise becomes an empty
+    # or invented workout on the watch; the toggle is the escape hatch for a
+    # user whose real plans the gate misjudges.
+    "reject_non_workouts": True,
 }
 
 KEYS = frozenset(DEFAULTS)
