@@ -75,32 +75,6 @@ def _pair_groups(r, n, a, b):
             and g["steps"][1].get("type") == "recovery" and g["steps"][1].get("distance") == b]
 
 
-# --- Case 1: layered slashes + pace-annotation lines -------------------------
-# "4000/500/2000/500/4000" is the skeleton; the following lines annotate paces.
-# Correct = 5 flat run segments, no repeat, no duplication.
-C1 = Case(
-    name="layered-slashes",
-    prompt=(
-        "2 км разминка\n"
-        "4000/500/2000/500/4000\n"
-        "4 км в темпе 4:20\n"
-        "500м ближе к 5:20\n"
-        "2 км в темпе 4:00\n"
-        "2 км заминка"
-    ),
-    expected="wu 2000; 5 runs [4000@4:20,500@5:20,2000@4:00,500@5:20,4000@4:20]; cd 2000",
-    checks=[
-        ("warm/cool", lambda r: _warmup(r) == 2000 and _cooldown(r) == 2000),
-        ("5 runs, no repeat", lambda r: len(_intervals(r)) == 5
-            and all(e.get("type") == "run" for e in _intervals(r))),
-        ("distances", lambda r: [e.get("distance") for e in _intervals(r)]
-            == [4000, 500, 2000, 500, 4000]),
-        ("paces", lambda r: [e.get("pace") for e in _intervals(r)]
-            == ["04:20", "05:20", "04:00", "05:20", "04:20"]),
-    ],
-)
-
-
 # --- Case 2: subdivision inside a repeat + on/off recovery -------------------
 C2 = Case(
     name="subdivide+strides",
@@ -113,7 +87,6 @@ C2 = Case(
     ),
     expected="wu/cd 3000; 6x[1000@4:00,500@3:45,rest120]; 5x[run100,recovery100]",
     checks=[
-        ("warm/cool", lambda r: _warmup(r) == 3000 and _cooldown(r) == 3000),
         ("1500 split (1000+500)", lambda r: any(
             g.get("repeat") == 6
             and any(s.get("distance") == 1000 and s.get("pace") == "04:00" for s in g["steps"])
@@ -124,12 +97,7 @@ C2 = Case(
             g.get("repeat") == 6
             and any(s.get("type") == "rest" and s.get("rest") == 120 for s in g["steps"])
             for g in _repeats(r))),
-        ("5x 100/100 recovery", lambda r: any(
-            g.get("repeat") == 5 and len(g["steps"]) == 2
-            and g["steps"][0].get("distance") == 100
-            and g["steps"][1].get("distance") == 100
-            and g["steps"][1].get("type") == "recovery"
-            for g in _repeats(r))),
+        ("5x[run100, recovery100]", lambda r: len(_pair_groups(r, 5, 100, 100)) == 1),
     ],
 )
 
@@ -158,7 +126,6 @@ C3 = Case(
     ),
     expected="wu/cd 2000; two 3000@4:00; two 1km blocks = 2x[200@3:30, recovery200] + 200@3:30",
     checks=[
-        ("warm/cool", lambda r: _warmup(r) == 2000 and _cooldown(r) == 2000),
         ("two 3000@4:00", lambda r: sum(
             1 for e in _intervals(r)
             if e.get("type") == "run" and e.get("distance") == 3000 and e.get("pace") == "04:00") == 2),
@@ -172,38 +139,16 @@ C3 = Case(
 )
 
 
-# --- Case 4: explicit rep count + rest between sets (examples/hey-track-07-22) -
-# Tests reliability on a large EXPLICIT count ("Repeat 10 times") — the failure
-# mode where reasoning models occasionally returned 9 instead of 10.
-C4 = Case(
-    name="explicit-10x+rest",
-    prompt=_prompt("hey-track-07-22.txt"),
-    expected="wu 3000, cd 2000; 10x[300@3:30, recovery100, 200@3:20, rest90]",
-    checks=[
-        ("warm/cool", lambda r: _warmup(r) == 3000 and _cooldown(r) == 2000),
-        ("repeat == 10", lambda r: any(g.get("repeat") == 10 for g in _repeats(r))),
-        ("4 steps, rest inside", lambda r: any(
-            g.get("repeat") == 10 and len(g["steps"]) == 4
-            and g["steps"][0].get("distance") == 300 and g["steps"][0].get("pace") == "03:30"
-            and g["steps"][1].get("distance") == 100 and g["steps"][1].get("type") == "recovery"
-            and g["steps"][2].get("distance") == 200 and g["steps"][2].get("pace") == "03:20"
-            and g["steps"][3].get("type") == "rest" and g["steps"][3].get("rest") == 90
-            for g in _repeats(r))),
-    ],
-)
-
-
 # --- Case 5: real set with time-based recovery + ambiguous count (09-30) -----
 # From examples/hey-track-09-30.txt. New dimensions vs the others: an active jog
 # recovery given by time ("200m active jog 60-70 sec"), an ambiguous rep count
-# ("do 4-5 of them"), and a time rest "between sets". Distinct from C4 (which has
-# distance-based recovery and a single EXACT count).
+# ("do 4-5 of them"), and a time rest "between sets" that must stay inside the
+# repeat.
 C5 = Case(
     name="real-set-09-30",
     prompt=_prompt("hey-track-09-30.txt"),
     expected="wu 3000, cd 1000; 4-5x[1600@4:00, recovery 200, 400@3:30, rest 120]",
     checks=[
-        ("warm/cool", lambda r: _warmup(r) == 3000 and _cooldown(r) == 1000),
         ("repeat 4 or 5", lambda r: any(g.get("repeat") in (4, 5) for g in _repeats(r))),
         ("paced runs 1600@4:00 & 400@3:30", lambda r: any(
             g.get("repeat") in (4, 5)
@@ -285,12 +230,9 @@ C6 = Case(
             1 for e in _intervals(r) if e.get("type") == "break") == 4),
         ("interior 3km & 2km kept", lambda r: len(_easy(r, 3000)) == 1
             and len(_easy(r, 2000)) == 1),
-        ("5x[200/200] repeat", lambda r: any(
-            g.get("repeat") == 5 and len(g["steps"]) == 2
-            and g["steps"][0].get("distance") == 200
-            and g["steps"][1].get("distance") == 200
-            and g["steps"][1].get("type") == "recovery"
-            for g in _repeats(r))),
+        # The work leg must stay 200 — a past flake let it absorb the
+        # preceding "2 км" (run 2000 + recovery 200).
+        ("5x[run200, recovery200]", lambda r: len(_pair_groups(r, 5, 200, 200)) == 1),
         ("order", _c6_order),
     ],
 )
@@ -300,8 +242,9 @@ C6 = Case(
 # Real failure (2026-08): "6/2/6/4/6/2" is a 6-segment skeleton in km; the three
 # annotation lines cover the three DISTINCT distances. gpt-4.1-mini emitted one
 # step per annotation line (6+2+4 = 12 km) instead of one per skeleton segment
-# (26 km) — the annotation count won over the skeleton count. Differs from C1,
-# where the skeleton has explicit meter values and annotations map 1:1-ish.
+# (26 km) — the annotation count won over the skeleton count. Also covers the
+# easier explicit-metre skeleton (`4000/500/2000/500/4000`), which needs the
+# same segment↔annotation binding without the unit inference.
 C7 = Case(
     name="unitless-km-skeleton",
     prompt=(
@@ -347,7 +290,6 @@ C8 = Case(
     ),
     expected="wu/cd 2000; 25x[400 run @03:55, rest 40-45s]",
     checks=[
-        ("warm/cool", lambda r: _warmup(r) == 2000 and _cooldown(r) == 2000),
         ("repeat == 25", lambda r: any(g.get("repeat") == 25 for g in _repeats(r))),
         ("400 m is a run, not recovery", lambda r: any(
             s.get("type") == "run" and s.get("distance") == 400 for s in _c8_steps(r))),
@@ -388,7 +330,6 @@ C9 = Case(
     ),
     expected="wu 3000, cd 1000; two 3x[200@4:00, recovery200]; 6000@4:30; rest 300 between the two sets",
     checks=[
-        ("warm/cool", lambda r: _warmup(r) == 3000 and _cooldown(r) == 1000),
         ("two 3x200/200 groups", lambda r: len(_c9_pair_groups(r)) == 2),
         ("work leg run@4:00, recovery leg pace-less", lambda r: len(_c9_pair_groups(r)) > 0
             and all(g["steps"][0].get("type") == "run" and g["steps"][0].get("pace") == "04:00"
@@ -430,27 +371,6 @@ C10 = Case(
 )
 
 
-# --- Case 11: break then rep-counted pair after a km warmup ------------------
-# Real workout (2026-10). Rare luna flake (1/16): the work leg of "5 раз 200/200"
-# took the preceding "2 км" and became run 2000 + recovery 200.
-C11 = Case(
-    name="break+pair-after-2km",
-    prompt=(
-        "2 км легко\n"
-        "30 выпадов вперед с дополнительным прыжком вверх на опорной ноге\n"
-        "5 раз 200/200 ( тут свободно)"
-    ),
-    expected="wu 2000; break (lunges); 5x[run200, recovery200], no paces",
-    checks=[
-        ("warmup 2000", lambda r: _warmup(r) == 2000),
-        ("lunges as break before the set", lambda r: [e.get("type") for e in _intervals(r)]
-            == ["break", "repeat"]),
-        ("5x[run200, recovery200]", lambda r: len(_pair_groups(r, 5, 200, 200)) == 1),
-        ("no paces (свободно)", lambda r: not any(s.get("pace") for s in _flat_steps(r))),
-    ],
-)
-
-
 # --- Case 12: minutes skeleton + pace range + timed warmup/cooldown ----------
 # Real workout (2026-10). The old prompt converted every timed step to a
 # distance using the pace (15 мин @ 4:28 → 3360 m), dropped the 10-minute
@@ -485,4 +405,59 @@ C12 = Case(
     ],
 )
 
-CASES = [C1, C2, C3, C4, C5, C6, C7, C8, C9, C10, C11, C12]
+# --- Case 13: timed reps inside a repeat, then a distance step ---------------
+# C12 covers timed steps only as flat segments. Here the timed work leg and its
+# timed recovery live INSIDE a repeat, with a pace range on the work leg, and a
+# distance step follows — so time and distance must coexist without either
+# leaking into the other. "2 мин трусцой" is a paceless timed jog: the prompt
+# says passive rest, the schema also has a timed recovery; both end on time on
+# the watch, so either passes.
+def _c13_steps(r):
+    for g in _repeats(r):
+        if g.get("repeat") == 6:
+            return g.get("steps", [])
+    return []
+
+
+C13 = Case(
+    name="timed-reps+distance",
+    prompt=(
+        "2 км разминка\n"
+        "6 раз по 3 мин в темпе 4:00-4:05 через 2 мин трусцой\n"
+        "Потом 2 км в темпе 4:20\n"
+        "2 км заминка"
+    ),
+    expected="wu/cd 2000; 6x[run 180 s @04:00–04:05, 120 s rest/recovery]; 2000@4:20",
+    checks=[
+        ("repeat == 6, 2 steps", lambda r: len(_c13_steps(r)) == 2),
+        ("work leg 180 s @ 4:00-4:05, no distance", lambda r: bool(_c13_steps(r))
+            and (_c13_steps(r)[0].get("type"), _c13_steps(r)[0].get("duration"),
+                 _c13_steps(r)[0].get("pace"), _c13_steps(r)[0].get("pace_slow"),
+                 _c13_steps(r)[0].get("distance"))
+            == ("run", 180, "04:00", "04:05", None)),
+        ("120 s recovery inside", lambda r: len(_c13_steps(r)) == 2 and (
+            _c13_steps(r)[1] == {"type": "rest", "rest": 120}
+            or _c13_steps(r)[1] == {"type": "recovery", "duration": 120})),
+        ("then 2000 @ 4:20", lambda r: [e.get("type") for e in _intervals(r)] == ["repeat", "run"]
+            and _intervals(r)[1].get("distance") == 2000
+            and _intervals(r)[1].get("pace") == "04:20"),
+    ],
+)
+
+
+# --- Case 14: not a workout --------------------------------------------------
+# Structured output forces a Workout for every message, so chatter can't be
+# refused — the model either invents steps or returns an empty one. The only
+# acceptable outputs are an empty workout or a refusal (which the runner scores
+# as ERROR). Anything else is a fabricated workout uploaded to the user's watch.
+C14 = Case(
+    name="not-a-workout",
+    prompt="Привет! Сегодня не бегу, колено побаливает после вчерашних 15 км. Что посоветуешь?",
+    expected="no steps: intervals empty, no warmup/cooldown",
+    checks=[
+        ("no intervals", lambda r: not _intervals(r)),
+        ("no warmup/cooldown", lambda r: not r.get("warmup") and not r.get("cooldown")),
+    ],
+)
+
+CASES = [C2, C3, C5, C6, C7, C8, C9, C10, C12, C13, C14]

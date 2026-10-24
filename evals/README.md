@@ -79,33 +79,45 @@ comes from the production provider's `wants_reasoning_prompt`, not from the eval
 
 ## Cases (`cases.py`)
 
-Five non-redundant cases, each probing a distinct skill:
+Eleven cases, each probing a distinct skill (pruned 2026-10-24: a case that is a
+subset of another costs a call per run and adds no detection power):
 
 | case | source | probes |
 |---|---|---|
-| `layered-slashes` | inline | flat skeleton (`4000/500/2000/...`) + binding pace-annotation lines, no duplication |
 | `subdivide+strides` | inline | subdividing a rep (`1500` → `1000+500`) inside a repeat, plus on/off easy recovery |
-| `200/200-budget` | inline | distance-budgeted alternation (`1 km of 200/200` = 5×200 m) + fast/slow paces |
-| `explicit-10x+rest` | `examples/prompts/hey-track-07-22.txt` | a large **exact** rep count (10) + distance recovery + rest inside the repeat |
-| `real-set-09-30` | `examples/prompts/hey-track-09-30.txt` | **time**-based active recovery + **ambiguous** count (4–5) + a "2 min" rest (sec≠metre trap) |
+| `200/200-budget` | inline | distance-budgeted alternation with a leftover (`1 km of 200/200` = 2 pairs + 200) + fast/slow paces |
+| `real-set-09-30` | `examples/prompts/hey-track-09-30.txt` | **time**-based active recovery + **ambiguous** count (4–5) + rest inside the repeat |
+| `breaks-between-runs` | inline | strength lines as `break` steps, interior easy km kept, `5 раз 200/200` as a rep count |
+| `unitless-km-skeleton` | inline | `6/2/6/4/6/2` skeleton with fewer annotation lines than segments |
+| `pace-ceiling-25x400` | inline | "чуть из 4 мин" → 03:55, a large exact rep count, a rest range |
+| `rep-pair-single-pace+walk-jog` | inline | pace binds to the work leg only; timed walk/jog → rest |
+| `km-skeleton+budget` | inline | skeleton segments expanded in place by a distance budget |
+| `minutes-skeleton+pace-range` | inline | skeleton in minutes, timed warmup/cooldown, pace range kept |
+| `timed-reps+distance` | inline | timed work + recovery **inside** a repeat, then a distance step |
+| `not-a-workout` | inline | chatter must yield an empty workout, not an invented one |
 
-The two real cases load their prompt straight from `examples/prompts/`, so editing
-those files updates the eval.
+Warmup/cooldown is only checked where it is the hard part (`breaks-between-runs`,
+`km-skeleton+budget`, `minutes-skeleton+pace-range`); elsewhere it always passed
+and only padded the score. The leaderboard also reports the share of case-runs
+with every check green — the number that matches "the watch workout is right".
+
+The real case loads its prompt straight from `examples/prompts/`, so editing that
+file updates the eval.
 
 ## Which example files are used?
 
-Only the two **input prompts** are eval inputs:
+Of the example files, only one input prompt is an eval input:
 
 | file | used? | why |
 |---|---|---|
-| `prompts/hey-track-07-22.txt` | ✅ case `explicit-10x+rest` | real user prompt |
+| `prompts/hey-track-07-22.txt` | ❌ | real user prompt; its case was dropped (10× + rest inside is covered by `pace-ceiling-25x400` and `real-set-09-30`) |
 | `prompts/hey-track-09-30.txt` | ✅ case `real-set-09-30` | real user prompt |
-| `intervals/july-22.json` | ➖ not here | reference output for the **live test** (`tests/test_plan_to_json_live.py`), not the eval |
+| `intervals/july-22.json` | ❌ | reference output of 07-22; the live pytest that used it was removed |
 | `workouts/fartlek.json` | ❌ | Garmin **output** format, no source prompt |
 | `workouts/hey-track-06-30.json` | ❌ | Garmin output, no prompt; also a dup of `-clean` |
 | `workouts/hey-track-06-30-clean.json` | ❌ | Garmin output (two fartlek blocks), no prompt |
 | `workouts/hey-track-07-15.json` | ❌ | Garmin output (ladder 2k-1.6k-800-400), no prompt |
-| `workouts/hey-track-07-22.json` | ❌ | Garmin output of 07-22 (its prompt is already a case) |
+| `workouts/hey-track-07-22.json` | ❌ | Garmin output of 07-22 |
 | `workouts/hey-track-07-22-convert.json` | ❌ | converted dup of 07-22 |
 
 Everything under `workouts/` is **Garmin output JSON with no matching input prompt**,

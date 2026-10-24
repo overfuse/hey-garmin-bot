@@ -84,11 +84,33 @@ subdivision example broke that case 0/3; restoring it fixed it).
   SYSTEM_PROMPT_REASONING.md serves OpenAI reasoning models — an edit to one
   does not cover the other; smoke-test whichever variant(s) changed.
 
-## Improvement backlog (agreed 2026-08-03; items 1–3 done 2026-10-24: `-c`, history, `--adaptive`)
+## Improvement backlog (revised 2026-10-24, highest impact first)
 
-4. **`reasoning_effort="high"` benchmark** — may cut arithmetic flakes at some
+Done: case filter (`-c`), `history.jsonl` accumulation (`--history`), adaptive
+re-runs (`--adaptive`), case pruning + whole-case pass rate (2026-10-24).
+
+1. **Reject non-workout input** — `not-a-workout` is 1/2 on haiku-5.5:
+   structured output forces a `Workout`, so chatter comes back empty or
+   invented (`rest 3600`), and nothing stops it reaching Garmin. Two layers:
+   (a) deterministic guard in `workout_service` — no `run`/`break` step →
+   new `FailureCode.NOT_A_WORKOUT` (billed, so no refund); (b) wrap the
+   output as `ParseResult(is_workout, workout?)` with `is_workout` FIRST
+   (field order drives decoding, see `workout_ai/models.py`). (a) alone is
+   safe to ship.
+2. **Production post-parse validator + one retry** — deterministic checks
+   (e.g. alternation segments sum to the stated budget, recoveries carry no
+   pace) on the parsed dict would lift ~98% model output to ~99.9% effective
+   and make small eval deltas irrelevant to users.
+3. **Mine cases from production** — `workout_log` stores every prompt and
+   error; `PARSE_FAILED` and prompts re-sent by the same user within minutes
+   are real failures. Uncovered patterns: ladders (`07-15`), multi-block
+   fartleks (`06-30`) — see README.
+4. **Settle the timed-jog rule** — the prompt says a paceless timed jog is
+   `rest`, but the schema also offers `TimedRecoveryStep`. haiku-5.5 picks
+   `rest`; `timed-reps+distance` accepts both. Pick one, remove the other
+   path from prompt or schema, then tighten the check.
+5. **English coverage** — only `real-set-09-30` is English. Add one or two if
+   English-speaking users are a meaningful share.
+6. **`reasoning_effort="high"` benchmark** — OpenAI reasoning models only (the
+   prod Claude model uses adaptive thinking); may cut arithmetic flakes at some
    latency cost; one 6-run batch would answer it.
-5. **Production post-parse validator + one retry** — deterministic checks
-   (e.g. alternation segments sum to the stated budget) on the parsed dict
-   would lift ~98% model output to ~99.9% effective and make small eval deltas
-   irrelevant to users. Highest real-world impact of the list.

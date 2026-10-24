@@ -93,7 +93,8 @@ def _report(results, models, cases):
     for r in results:
         by.setdefault((r["case"], r["model"]), []).append(r)
 
-    totals = {m.label: [0, 0, 0.0, 0] for m in models}  # passed, total, dt_sum, dt_n
+    # checks passed, checks total, dt_sum, dt_n, clean case-runs, case-runs
+    totals = {m.label: [0, 0, 0.0, 0, 0, 0] for m in models}
 
     for case in cases:
         print(f"\n=== {case.name} ===")
@@ -107,6 +108,8 @@ def _report(results, models, cases):
             avg_dt = sum(dts) / len(dts) if dts else 0.0
             totals[model.label][2] += sum(dts)
             totals[model.label][3] += len(dts)
+            totals[model.label][4] += sum(1 for r in runs_data if _passed_all(r))
+            totals[model.label][5] += n
 
             if len(errs) == n and runs_data:
                 msg = errs[0]["error"]
@@ -127,13 +130,17 @@ def _report(results, models, cases):
             row = "  ".join(f"{labels[i][:18]}:{cells[i]}" for i in range(len(labels)))
             print(f"    {model.label:<26} {score:>6}  {avg_dt:4.1f}s  | {row}")
 
-    print("\n=== leaderboard (checks passed across all cases) ===")
+    # Case-runs with every check green: one wrong step makes the watch workout
+    # wrong, so this is the user-facing number; the check % is the diagnostic.
+    print("\n=== leaderboard (checks passed | case-runs fully correct) ===")
     ranked = sorted(models, key=lambda m: (-_rate(totals[m.label]), m.label))
     for m in ranked:
-        passed, total, dt_sum, dt_n = totals[m.label]
+        passed, total, dt_sum, dt_n, clean, n_runs = totals[m.label]
         pct = 100 * passed / total if total else 0
+        cpct = 100 * clean / n_runs if n_runs else 0
         avg = dt_sum / dt_n if dt_n else 0
-        print(f"    {m.label:<26} {passed:>3}/{total:<3} ({pct:5.1f}%)   avg {avg:4.1f}s")
+        print(f"    {m.label:<26} {passed:>3}/{total:<3} ({pct:5.1f}%)  |  "
+              f"{clean:>2}/{n_runs:<2} ({cpct:5.1f}%)   avg {avg:4.1f}s")
 
 
 def _rate(t):
