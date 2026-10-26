@@ -103,11 +103,16 @@ C2 = Case(
 
 
 # --- Case 3: distance-budgeted pair + fast/slow paces (two blocks) ----------
-# "1 км в режиме 200/200" = 1000 m of 200/200 pairs. Every slashed pair is run +
-# paceless recovery, so the slow pace (5:00) is dropped; 1000 is 2.5 pairs →
-# repeat 2 × [200 run @ 3:30, 200 recovery] + one trailing 200 run @ 3:30.
-def _c3_runs200(r):
-    return [s for s in _unrolled(r) if s.get("type") == "run" and s.get("distance") == 200]
+# "1 км в режиме 200/200" = 1000 m of 200/200 pairs. The slow leg has its own
+# pace, so it is a paced run, not a recovery; 1000 is 2.5 pairs →
+# repeat 2 × [200 run @ 3:30, 200 run @ 5:00] + one trailing 200 run @ 3:30.
+def _paced_pair_groups(r, n, a, b, pa, pb):
+    """Repeat groups of exactly n × [a m run @ pa, b m run @ pb]."""
+    return [g for g in _repeats(r) if g.get("repeat") == n and len(g["steps"]) == 2
+            and (g["steps"][0].get("type"), g["steps"][0].get("distance"), g["steps"][0].get("pace"))
+            == ("run", a, pa)
+            and (g["steps"][1].get("type"), g["steps"][1].get("distance"), g["steps"][1].get("pace"))
+            == ("run", b, pb)]
 
 
 C3 = Case(
@@ -124,17 +129,18 @@ C3 = Case(
         "Медленные по 5:00\n"
         "2 км заминка"
     ),
-    expected="wu/cd 2000; two 3000@4:00; two 1km blocks = 2x[200@3:30, recovery200] + 200@3:30",
+    expected="wu/cd 2000; two 3000@4:00; two 1km blocks = 2x[200@3:30, 200@5:00] + 200@3:30",
     checks=[
         ("two 3000@4:00", lambda r: sum(
             1 for e in _intervals(r)
             if e.get("type") == "run" and e.get("distance") == 3000 and e.get("pace") == "04:00") == 2),
         ("budget: 2×1000 m of 200s", lambda r: sum(
             s.get("distance") or 0 for s in _unrolled(r) if s.get("distance") == 200) == 2000),
-        ("pairs: 2x[run, recovery] ×2", lambda r: len(_pair_groups(r, 2, 200, 200)) == 2),
-        ("runs @3:30, no 5:00", lambda r: len(_c3_runs200(r)) == 6
-            and all(s.get("pace") == "03:30" for s in _c3_runs200(r))
-            and not any(s.get("pace") == "05:00" for s in _unrolled(r))),
+        ("pairs: 2x[200@3:30, 200@5:00] ×2", lambda r: len(
+            _paced_pair_groups(r, 2, 200, 200, "03:30", "05:00")) == 2),
+        ("trailing 200 @3:30", lambda r: sum(
+            1 for e in _intervals(r)
+            if e.get("type") == "run" and e.get("distance") == 200 and e.get("pace") == "03:30") == 2),
     ],
 )
 
@@ -460,4 +466,34 @@ C14 = Case(
     ],
 )
 
-CASES = [C2, C3, C5, C6, C7, C8, C9, C10, C12, C13, C14]
+# --- Case 15: unitless 3-part skeleton of two budgeted pairs, both legs paced -
+# Seen live (2026-10-26): every slow leg came back as a paceless recovery
+# because the prompt said to drop a slow leg's pace. The athlete wants both legs
+# paced, in the order the description states them (slow first here). A 1/3 flake also expanded "6/1/6" into two 1/1 blocks plus the 500s.
+C15 = Case(
+    name="skeleton+paced-pairs",
+    prompt=(
+        "2 км легкая разминка\n"
+        "6/1/6\n"
+        "6 км в режиме 1/1\n"
+        "1 км медленно по 4:40\n"
+        "1 км быстро по 4:00\n\n"
+        "1 км между шестерками легко\n\n"
+        "6 км в режиме 500/500\n"
+        "500м медленные по 4:30\n"
+        "500м быстрые по 3:50\n\n"
+        "2 км заминка"
+    ),
+    expected="wu/cd 2000; 3x[1000@4:40, 1000@4:00] → easy 1000 → 6x[500@4:30, 500@3:50]",
+    checks=[
+        ("3x[1000@4:40, 1000@4:00] (stated order)", lambda r: len(
+            _paced_pair_groups(r, 3, 1000, 1000, "04:40", "04:00")) == 1),
+        ("6x[500@4:30, 500@3:50] (stated order)", lambda r: len(
+            _paced_pair_groups(r, 6, 500, 500, "04:30", "03:50")) == 1),
+        ("shape: repeat, easy 1000, repeat", lambda r: len(_intervals(r)) == 3
+            and _is_easy(_intervals(r)[1], 1000)),
+        ("wu/cd 2000", lambda r: _warmup(r) == 2000 and _cooldown(r) == 2000),
+    ],
+)
+
+CASES = [C2, C3, C5, C6, C7, C8, C9, C10, C12, C13, C14, C15]
