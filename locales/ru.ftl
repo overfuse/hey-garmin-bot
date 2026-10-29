@@ -2,6 +2,14 @@
 # message, variable for variable (tests/test_i18n.py enforces it). Russian
 # plural categories: one (1, 21), few (2-4, 22), many (5-20, 11-14).
 
+## Command menu (☰ button), registered on boot
+
+cmd-start = Войти в Garmin Connect
+cmd-settings = Настройки тренировок
+cmd-language = Сменить язык
+cmd-stats = Статистика использования
+cmd-logout = Выйти
+
 ## /start, login
 
 start-already-logged-in =

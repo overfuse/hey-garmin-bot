@@ -1,6 +1,14 @@
 # Bot copy, English. Every message here must also exist in ru.ftl with the
 # same variables (tests/test_i18n.py enforces it). Syntax: projectfluent.org.
 
+## Command menu (☰ button), registered on boot
+
+cmd-start = Log in to Garmin Connect
+cmd-settings = Workout settings
+cmd-language = Change language
+cmd-stats = Usage stats
+cmd-logout = Log out
+
 ## /start, login
 
 start-already-logged-in =

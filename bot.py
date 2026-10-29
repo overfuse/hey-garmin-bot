@@ -13,6 +13,7 @@ import traceback
 from dotenv import load_dotenv
 from pyrogram import Client, filters, raw
 from pyrogram.types import (
+    BotCommand,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -27,7 +28,7 @@ from audit import create_indexes as create_audit_indexes
 from audit import log_auth_event
 from garmin import login_to_garmin, workout_url
 from garmin_curl_login import GarminInvalidCredentials
-from i18n import t
+from i18n import DEFAULT_LANG, LANGS, t
 from rate_limiter import (
     RateLimiterUnavailable,
     close_connections,
@@ -92,6 +93,10 @@ _FAILURE_MSG: dict[FailureCode, str] = {
 _PROGRESS_MSG: dict[Progress, str] = {
     Progress.SESSION_REFRESHED: "session-refreshed",
 }
+
+# Commands listed under the menu button, in display order. Each needs a
+# cmd-<name> description in locales/*.ftl.
+_MENU_COMMANDS = ("settings", "language", "stats", "start", "logout")
 
 # /language buttons. Each label is in its own language, so a user stuck in
 # the wrong one can still find theirs.
@@ -365,22 +370,25 @@ if __name__ == "__main__":
         print("Starting Pyrogram...")
         await app.start()
         print(f"Bot started as @{app.me.username}")
-        if WEBAPP_URL:
-            # Make settings permanently reachable: the bot's default menu
-            # button (☰ next to the message box in every private chat) opens
-            # the Mini App. Menu-button launches carry full initData, same as
-            # the /settings inline button. Raw API on purpose — pyrogram's
-            # set_chat_menu_button(chat_id=None) resolves the peer "me"
-            # instead of sending InputUserEmpty, so it never sets the DEFAULT
-            # button. Re-run on every boot: it's idempotent and picks up a
-            # changed WEBAPP_URL (e.g. a fresh dev tunnel) automatically.
-            await app.invoke(
-                raw.functions.bots.SetBotMenuButton(
-                    user_id=raw.types.InputUserEmpty(),
-                    button=raw.types.BotMenuButton(text="Settings", url=WEBAPP_URL),
-                )
+        # The menu button (☰ next to the message box) lists the commands;
+        # /settings among them opens the Mini App. Explicitly set, not left
+        # alone: earlier deploys pointed it at the Mini App directly. Raw API
+        # on purpose — pyrogram's set_chat_menu_button(chat_id=None) resolves
+        # the peer "me" instead of sending InputUserEmpty, so it never sets
+        # the DEFAULT button. Both calls are idempotent; re-run on every boot.
+        await app.invoke(
+            raw.functions.bots.SetBotMenuButton(
+                user_id=raw.types.InputUserEmpty(),
+                button=raw.types.BotMenuButtonCommands(),
             )
-            print("✓ Default menu button → settings Mini App")
+        )
+        # language_code="" is the fallback for clients in any other language.
+        for code, lang in [("", DEFAULT_LANG), *((lang, lang) for lang in LANGS)]:
+            await app.set_bot_commands(
+                [BotCommand(cmd, t(lang, f"cmd-{cmd}")) for cmd in _MENU_COMMANDS],
+                language_code=code,
+            )
+        print("✓ Menu button → command list")
         # finally, not a trailing statement: idle() returns on SIGTERM, which is how
         # Railway stops us. An exception escaping it must not skip the teardown.
         try:
