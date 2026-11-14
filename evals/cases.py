@@ -496,4 +496,37 @@ C15 = Case(
     ],
 )
 
-CASES = [C2, C3, C5, C6, C7, C8, C9, C10, C12, C13, C14, C15]
+# --- Case 16: rest of unstated length between reps ---------------------------
+# Seen live (2026-11-14): "отдых между произвольный" was dropped in 7/8 runs, so
+# the watch chained 15 accelerations back to back. A rest step needs seconds the
+# text doesn't give; the lap-ended `break` is the step that fits. An invented
+# `rest` duration would be a fabrication, so it fails too.
+def _c16_group(r, dist):
+    for g in _repeats(r):
+        steps = g.get("steps", [])
+        if g.get("repeat") == 5 and any(
+                s.get("type") == "run" and s.get("distance") == dist for s in steps):
+            return steps
+    return []
+
+
+C16 = Case(
+    name="free-rest-between-reps",
+    prompt=(
+        "3 км легкого бега\n"
+        "5 раз по 300м\n"
+        "5 раз по 200м\n"
+        "5 раз по 100м\n"
+        "1 км заминка\n\n"
+        "Все это свободные ускорения на ритм, без больших усилий, чтобы тебе было легче завтра\n\n"
+        "* отдых между произвольный"
+    ),
+    expected="wu 3000; 5x[300 run, break], 5x[200 run, break], 5x[100 run, break]; cd 1000",
+    checks=[
+        *[(f"5x[{d} run, break]", lambda r, d=d: (s := _c16_group(r, d))
+           and s[-1].get("type") == "break") for d in (300, 200, 100)],
+        ("wu 3000 / cd 1000", lambda r: _warmup(r) == 3000 and _cooldown(r) == 1000),
+    ],
+)
+
+CASES = [C2, C3, C5, C6, C7, C8, C9, C10, C12, C13, C14, C15, C16]
