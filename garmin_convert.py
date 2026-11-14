@@ -202,7 +202,10 @@ def convert(interval_json: Dict[str, Any]) -> Dict[str, Any]:
         nonlocal order
         etype = elem["type"]
         if etype == "run":
-            key = "interval" if "pace" in elem else "recovery"
+            # Inside a repeat a run is the work leg even without a pace ("5 раз
+            # по 300м" strides); only a top-level paceless run is an easy
+            # recovery between blocks.
+            key = "interval" if "pace" in elem or nested else "recovery"
             order += 1
             return exec_step(order, key, **_extent_and_pace(elem), child=nested)
         if etype == "recovery":

@@ -85,6 +85,17 @@ def test_paceless_run_becomes_a_recovery_with_no_target():
     assert step["targetType"]["workoutTargetTypeKey"] == "no.target"
 
 
+def test_paceless_run_inside_a_repeat_is_the_work_leg():
+    """"5 раз по 300м" strides carry no pace but are the work: on the watch they
+    must read Interval, while the rest after them stays a recovery."""
+    payload = convert({"intervals": [{"type": "repeat", "repeat": 5, "steps": [
+        {"type": "run", "distance": 300}, {"type": "break", "name": "Отдых"}]}]})
+    run, rest = _steps(payload)[0]["workoutSteps"]
+    assert run["stepType"]["stepTypeKey"] == "interval"
+    assert run["targetType"]["workoutTargetTypeKey"] == "no.target"
+    assert rest["stepType"]["stepTypeKey"] == "recovery"
+
+
 def test_break_step_is_a_named_lap_ended_recovery():
     """An in-place drill ("30 frog jumps") has no distance and no duration: it
     must surface as a recovery step that shows the exercise and waits for the
